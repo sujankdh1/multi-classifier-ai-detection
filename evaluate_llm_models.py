@@ -1,6 +1,6 @@
 """
 LLM Text Classification Pipeline
-Evaluates Universal Sentence Encoder (USE) and DistilBERT models on binary classification task
+Evaluates Universal Sentence Encoder (USE) and BERT models on binary classification task
 using 5-fold cross-validation.
 """
 
@@ -115,9 +115,9 @@ class USEClassifier:
 
 
 class BERTClassifier:
-    """DistilBERT classifier with 5-fold cross-validation."""
+    """BERT classifier with 5-fold cross-validation."""
     
-    def __init__(self, model_name="distilbert-base-uncased", max_length=512, batch_size=32):
+    def __init__(self, model_name="bert-base-uncased", max_length=512, batch_size=16):
         self.model_name = model_name
         self.max_length = max_length
         self.batch_size = batch_size
@@ -128,20 +128,20 @@ class BERTClassifier:
         self.scaler = StandardScaler()
         
     def load_model(self):
-        """Load DistilBERT model and tokenizer."""
-        print("Loading DistilBERT model and tokenizer...")
+        """Load BERT model and tokenizer."""
+        print("Loading BERT model and tokenizer...")
         self.tokenizer = AutoTokenizer.from_pretrained(self.model_name)
         self.model = AutoModel.from_pretrained(self.model_name)
         self.model.to(self.device)
         self.model.eval()
-        print(f"DistilBERT model loaded successfully on {self.device}.")
+        print(f"BERT model loaded successfully on {self.device}.")
         
     def get_embeddings(self, texts):
-        """Extract DistilBERT embeddings using [CLS] token."""
+        """Extract BERT embeddings using [CLS] token."""
         embeddings = []
         
         with torch.no_grad():
-            for i in tqdm(range(0, len(texts), self.batch_size), desc="Extracting DistilBERT embeddings"):
+            for i in tqdm(range(0, len(texts), self.batch_size), desc="Extracting BERT embeddings"):
                 batch_texts = texts[i:i+self.batch_size]
                 
                 # Tokenize
@@ -172,7 +172,7 @@ class BERTClassifier:
         fold_times = []
         
         print(f"\n{'='*60}")
-        print("DistilBERT - 5-Fold Cross-Validation")
+        print("BERT - 5-Fold Cross-Validation")
         print(f"{'='*60}")
         
         for fold, (train_idx, val_idx) in enumerate(skf.split(X, y), 1):
@@ -294,8 +294,8 @@ def print_results_summary(use_results, bert_results):
     
     print("\n" + "-"*80 + "\n")
     
-    # DistilBERT Results
-    print("DistilBERT (distilbert-base-uncased):")
+    # BERT Results
+    print("BERT (bert-base-uncased):")
     print(f"  Mean Accuracy: {np.mean(bert_accs):.4f} ± {np.std(bert_accs):.4f}")
     print(f"  Per-fold Accuracies: {[f'{acc:.4f}' for acc in bert_accs]}")
     print(f"  Mean Time per Fold: {np.mean(bert_times):.2f}s ± {np.std(bert_times):.2f}s")
@@ -306,7 +306,7 @@ def print_results_summary(use_results, bert_results):
     # Comparison
     print("Comparison:")
     print(f"  Accuracy Difference: {np.mean(bert_accs) - np.mean(use_accs):.4f}")
-    print(f"  Speed Ratio (USE/DistilBERT): {np.mean(use_times) / np.mean(bert_times):.2f}x")
+    print(f"  Speed Ratio (USE/BERT): {np.mean(use_times) / np.mean(bert_times):.2f}x")
     
     print(f"\n{'='*80}\n")
 
@@ -359,9 +359,9 @@ def main():
     print("="*80)
     use_results = use_classifier.evaluate_cv(X, y, n_splits=5)
     
-    # Evaluate DistilBERT
+    # Evaluate BERT
     print("\n" + "="*80)
-    print("STARTING DISTILBERT EVALUATION")
+    print("STARTING BERT EVALUATION")
     print("="*80)
     bert_results = bert_classifier.evaluate_cv(X, y, n_splits=5)
     
