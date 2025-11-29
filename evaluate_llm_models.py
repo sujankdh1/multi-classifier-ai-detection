@@ -23,8 +23,8 @@ from sklearn.metrics import accuracy_score
 from sklearn.preprocessing import StandardScaler
 
 # TensorFlow and USE imports
-import tensorflow as tf
-import tensorflow_hub as hub
+# import tensorflow as tf
+# import tensorflow_hub as hub
 
 # Transformers and PyTorch imports
 from transformers import AutoTokenizer, AutoModel
@@ -32,8 +32,20 @@ import torch
 
 # Set random seeds for reproducibility
 np.random.seed(42)
-tf.random.set_seed(42)
+# tf.random.set_seed(42)
 torch.manual_seed(42)
+
+# Model Configuration
+USE_DISTILBERT = True  # Set to False for BERT, True for DistilBERT
+
+if USE_DISTILBERT:
+    BERT_MODEL_NAME = "distilbert-base-uncased"
+    BERT_BATCH_SIZE = 32
+    BERT_MODEL_LABEL = "DistilBERT"
+else:
+    BERT_MODEL_NAME = "bert-base-uncased"
+    BERT_BATCH_SIZE = 16
+    BERT_MODEL_LABEL = "BERT"
 
 
 class USEClassifier:
@@ -117,7 +129,12 @@ class USEClassifier:
 class BERTClassifier:
     """BERT classifier with 5-fold cross-validation."""
     
-    def __init__(self, model_name="bert-base-uncased", max_length=512, batch_size=16):
+    def __init__(self, model_name=None, max_length=512, batch_size=None):
+        # Use default from config if not specified
+        if model_name is None:
+            model_name = BERT_MODEL_NAME
+        if batch_size is None:
+            batch_size = BERT_BATCH_SIZE
         self.model_name = model_name
         self.max_length = max_length
         self.batch_size = batch_size
@@ -128,20 +145,20 @@ class BERTClassifier:
         self.scaler = StandardScaler()
         
     def load_model(self):
-        """Load BERT model and tokenizer."""
-        print("Loading BERT model and tokenizer...")
+        """Load BERT/DistilBERT model and tokenizer."""
+        print(f"Loading {BERT_MODEL_LABEL} model and tokenizer...")
         self.tokenizer = AutoTokenizer.from_pretrained(self.model_name)
         self.model = AutoModel.from_pretrained(self.model_name)
         self.model.to(self.device)
         self.model.eval()
-        print(f"BERT model loaded successfully on {self.device}.")
+        print(f"{BERT_MODEL_LABEL} model loaded successfully on {self.device}.")
         
     def get_embeddings(self, texts):
-        """Extract BERT embeddings using [CLS] token."""
+        """Extract BERT/DistilBERT embeddings using [CLS] token."""
         embeddings = []
         
         with torch.no_grad():
-            for i in tqdm(range(0, len(texts), self.batch_size), desc="Extracting BERT embeddings"):
+            for i in tqdm(range(0, len(texts), self.batch_size), desc=f"Extracting {BERT_MODEL_LABEL} embeddings"):
                 batch_texts = texts[i:i+self.batch_size]
                 
                 # Tokenize
@@ -172,7 +189,7 @@ class BERTClassifier:
         fold_times = []
         
         print(f"\n{'='*60}")
-        print("BERT - 5-Fold Cross-Validation")
+        print(f"{BERT_MODEL_LABEL} - 5-Fold Cross-Validation")
         print(f"{'='*60}")
         
         for fold, (train_idx, val_idx) in enumerate(skf.split(X, y), 1):
@@ -196,6 +213,51 @@ class BERTClassifier:
             
             # Predict and evaluate
             y_pred = self.classifier.predict(X_val_emb_scaled)
+            accuracy = accuracy_score(y_val, y_pred)
+            
+            fold_time = time.time() - start_time
+            fold_accuracies.append(accuracy)
+            fold_times.append(fold_time)
+            
+            print(f"  Accuracy: {accuracy:.4f} | Time: {fold_time:.2f}s")
+        
+        return fold_accuracies, fold_times
+
+
+class LIWCClassifier:
+    """LIWC features classifier with 5-fold cross-validation."""
+    
+    def __init__(self):
+        self.classifier = RandomForestClassifier(n_estimators=100, random_state=42, n_jobs=-1)
+        self.scaler = StandardScaler()
+        
+    def evaluate_cv(self, X, y, n_splits=5):
+        """Perform 5-fold cross-validation on LIWC features."""
+        skf = StratifiedKFold(n_splits=n_splits, shuffle=True, random_state=42)
+        fold_accuracies = []
+        fold_times = []
+        
+        print(f"\n{'='*60}")
+        print("LIWC Features - 5-Fold Cross-Validation")
+        print(f"{'='*60}")
+        
+        for fold, (train_idx, val_idx) in enumerate(skf.split(X, y), 1):
+            print(f"\nFold {fold}/{n_splits}")
+            
+            # Split data
+            X_train, X_val = X[train_idx], X[val_idx]
+            y_train, y_val = y[train_idx], y[val_idx]
+            
+            # Scale features
+            start_time = time.time()
+            X_train_scaled = self.scaler.fit_transform(X_train)
+            X_val_scaled = self.scaler.transform(X_val)
+            
+            # Train classifier
+            self.classifier.fit(X_train_scaled, y_train)
+            
+            # Predict and evaluate
+            y_pred = self.classifier.predict(X_val_scaled)
             accuracy = accuracy_score(y_val, y_pred)
             
             fold_time = time.time() - start_time
@@ -265,10 +327,10 @@ def load_and_preprocess_data(filepath):
     X = [X[i] for i in valid_indices]
     y = [y[i] for i in valid_indices]
     
-    # Limit to 1000 samples for testing
-    print(f"\nLimiting to 1000 samples for testing...")
-    X = X[:1000]
-    y = y[:1000]
+    # Use full dataset (no sample limit)
+    # print(f"\nLimiting to 10 samples for testing...")
+    # X = X[:10]
+    # y = y[:10]
     
     print(f"\nFinal dataset size: {len(X)} samples")
     print(f"Sample first sentence (first 100 chars): {X[0][:100]}..." if X else "No samples")
@@ -276,63 +338,137 @@ def load_and_preprocess_data(filepath):
     return X, y
 
 
-def print_results_summary(use_results, bert_results):
+def load_liwc_data(filepath):
+    """Load and preprocess LIWC features dataset."""
+    print(f"\nLoading LIWC dataset from {filepath}...")
+    df = pd.read_csv(filepath)
+    
+    print(f"LIWC dataset shape: {df.shape}")
+    
+    # Metadata columns to exclude
+    metadata_cols = ['pageid', 'title', 'content', 'categories', 'is_ai_flagged', 'Segment']
+    
+    # Get LIWC feature columns (all columns except metadata)
+    liwc_feature_cols = [col for col in df.columns if col not in metadata_cols]
+    print(f"Number of LIWC features: {len(liwc_feature_cols)}")
+    
+    # Check for missing values
+    missing_values = df[liwc_feature_cols].isna().sum().sum()
+    print(f"Missing values in LIWC features: {missing_values}")
+    
+    # Handle missing values
+    df = df.dropna(subset=liwc_feature_cols)
+    
+    # Check target variable
+    print(f"\nTarget variable 'is_ai_flagged' distribution:")
+    print(df['is_ai_flagged'].value_counts())
+    print(f"Class balance: {df['is_ai_flagged'].value_counts(normalize=True)}")
+    
+    # Extract features and labels
+    X = df[liwc_feature_cols].values.astype(np.float32)
+    y = df['is_ai_flagged'].values
+    
+    # Use full dataset (no sample limit)
+    # print(f"\nLimiting to 10 samples for testing...")
+    # X = X[:10]
+    # y = y[:10]
+    
+    print(f"\nFinal LIWC dataset size: {len(X)} samples")
+    print(f"Number of features: {X.shape[1]}")
+    
+    return X, y
+
+
+def print_results_summary(use_results, bert_results, liwc_results=None):
     """Print formatted results summary."""
-    use_accs, use_times = use_results
-    bert_accs, bert_times = bert_results
+    # Handle None results
+    if bert_results is not None:
+        bert_accs, bert_times = bert_results
     
     print(f"\n{'='*80}")
     print("EVALUATION RESULTS SUMMARY")
     print(f"{'='*80}\n")
     
-    # USE Results
-    print("Universal Sentence Encoder (USE):")
-    print(f"  Mean Accuracy: {np.mean(use_accs):.4f} ± {np.std(use_accs):.4f}")
-    print(f"  Per-fold Accuracies: {[f'{acc:.4f}' for acc in use_accs]}")
-    print(f"  Mean Time per Fold: {np.mean(use_times):.2f}s ± {np.std(use_times):.2f}s")
-    print(f"  Total Time: {np.sum(use_times):.2f}s")
+    # USE Results (PAUSED)
+    # if use_results is not None:
+    #     use_accs, use_times = use_results
+    #     print("Universal Sentence Encoder (USE):")
+    #     print(f"  Mean Accuracy: {np.mean(use_accs):.4f} ± {np.std(use_accs):.4f}")
+    #     print(f"  Per-fold Accuracies: {[f'{acc:.4f}' for acc in use_accs]}")
+    #     print(f"  Mean Time per Fold: {np.mean(use_times):.2f}s ± {np.std(use_times):.2f}s")
+    #     print(f"  Total Time: {np.sum(use_times):.2f}s")
+    #     print("\n" + "-"*80 + "\n")
     
-    print("\n" + "-"*80 + "\n")
+    # BERT/DistilBERT Results (PAUSED)
+    # if bert_results is not None:
+    #     bert_accs, bert_times = bert_results
+    #     print(f"{BERT_MODEL_LABEL} ({BERT_MODEL_NAME}):")
+    #     print(f"  Mean Accuracy: {np.mean(bert_accs):.4f} ± {np.std(bert_accs):.4f}")
+    #     print(f"  Per-fold Accuracies: {[f'{acc:.4f}' for acc in bert_accs]}")
+    #     print(f"  Mean Time per Fold: {np.mean(bert_times):.2f}s ± {np.std(bert_times):.2f}s")
+    #     print(f"  Total Time: {np.sum(bert_times):.2f}s")
+    #     print("\n" + "-"*80 + "\n")
     
-    # BERT Results
-    print("BERT (bert-base-uncased):")
-    print(f"  Mean Accuracy: {np.mean(bert_accs):.4f} ± {np.std(bert_accs):.4f}")
-    print(f"  Per-fold Accuracies: {[f'{acc:.4f}' for acc in bert_accs]}")
-    print(f"  Mean Time per Fold: {np.mean(bert_times):.2f}s ± {np.std(bert_times):.2f}s")
-    print(f"  Total Time: {np.sum(bert_times):.2f}s")
-    
-    print("\n" + "-"*80 + "\n")
-    
-    # Comparison
-    print("Comparison:")
-    print(f"  Accuracy Difference: {np.mean(bert_accs) - np.mean(use_accs):.4f}")
-    print(f"  Speed Ratio (USE/BERT): {np.mean(use_times) / np.mean(bert_times):.2f}x")
+    # LIWC Results
+    if liwc_results is not None:
+        liwc_accs, liwc_times = liwc_results
+        print("LIWC Features:")
+        print(f"  Mean Accuracy: {np.mean(liwc_accs):.4f} ± {np.std(liwc_accs):.4f}")
+        print(f"  Per-fold Accuracies: {[f'{acc:.4f}' for acc in liwc_accs]}")
+        print(f"  Mean Time per Fold: {np.mean(liwc_times):.2f}s ± {np.std(liwc_times):.2f}s")
+        print(f"  Total Time: {np.sum(liwc_times):.2f}s")
     
     print(f"\n{'='*80}\n")
 
 
-def save_results_to_csv(use_results, bert_results, output_file="evaluation_results.csv"):
+def save_results_to_csv(use_results, bert_results, liwc_results=None, output_file="evaluation_results.csv"):
     """Save results to CSV file."""
-    use_accs, use_times = use_results
-    bert_accs, bert_times = bert_results
+    # Create base DataFrame with only LIWC results
+    results_dict = {
+        'Fold': range(1, 6)
+    }
     
-    results_df = pd.DataFrame({
-        'Fold': range(1, 6),
-        'USE_Accuracy': use_accs,
-        'USE_Time': use_times,
-        'BERT_Accuracy': bert_accs,
-        'BERT_Time': bert_times
-    })
+    # Add USE results if available (PAUSED for now)
+    # if use_results is not None:
+    #     use_accs, use_times = use_results
+    #     results_dict['USE_Accuracy'] = use_accs
+    #     results_dict['USE_Time'] = use_times
+    
+    # Add BERT results if available (PAUSED for now)
+    # if bert_results is not None:
+    #     bert_accs, bert_times = bert_results
+    #     results_dict['BERT_Accuracy'] = bert_accs
+    #     results_dict['BERT_Time'] = bert_times
+    
+    # Add LIWC results if available
+    if liwc_results is not None:
+        liwc_accs, liwc_times = liwc_results
+        results_dict['LIWC_Accuracy'] = liwc_accs
+        results_dict['LIWC_Time'] = liwc_times
+    
+    results_df = pd.DataFrame(results_dict)
     
     # Add summary row
-    summary_row = pd.DataFrame({
-        'Fold': ['Mean', 'Std'],
-        'USE_Accuracy': [np.mean(use_accs), np.std(use_accs)],
-        'USE_Time': [np.mean(use_times), np.std(use_times)],
-        'BERT_Accuracy': [np.mean(bert_accs), np.std(bert_accs)],
-        'BERT_Time': [np.mean(bert_times), np.std(bert_times)]
-    })
+    summary_dict = {
+        'Fold': ['Mean', 'Std']
+    }
     
+    # if use_results is not None:
+    #     use_accs, use_times = use_results
+    #     summary_dict['USE_Accuracy'] = [np.mean(use_accs), np.std(use_accs)]
+    #     summary_dict['USE_Time'] = [np.mean(use_times), np.std(use_times)]
+    
+    # if bert_results is not None:
+    #     bert_accs, bert_times = bert_results
+    #     summary_dict['BERT_Accuracy'] = [np.mean(bert_accs), np.std(bert_accs)]
+    #     summary_dict['BERT_Time'] = [np.mean(bert_times), np.std(bert_times)]
+    
+    if liwc_results is not None:
+        liwc_accs, liwc_times = liwc_results
+        summary_dict['LIWC_Accuracy'] = [np.mean(liwc_accs), np.std(liwc_accs)]
+        summary_dict['LIWC_Time'] = [np.mean(liwc_times), np.std(liwc_times)]
+    
+    summary_row = pd.DataFrame(summary_dict)
     results_df = pd.concat([results_df, summary_row], ignore_index=True)
     results_df.to_csv(output_file, index=False)
     print(f"Results saved to {output_file}")
@@ -341,35 +477,46 @@ def save_results_to_csv(use_results, bert_results, output_file="evaluation_resul
 def main():
     """Main evaluation pipeline."""
     dataset_path = "combined_training_dataset.csv"
+    liwc_path = "LIWC-22 Results - combined_training_dataset - LIWC Analysis.csv"
     
-    # Load and preprocess data
-    X, y = load_and_preprocess_data(dataset_path)
+    # Load and preprocess data (SKIPPED - only running LIWC)
+    # X, y = load_and_preprocess_data(dataset_path)  # Not needed for LIWC only
+    
+    # Load LIWC data
+    X_liwc, y_liwc = load_liwc_data(liwc_path)
     
     # Initialize models
-    use_classifier = USEClassifier()
-    bert_classifier = BERTClassifier()
+    # use_classifier = USEClassifier()  # Paused for now
+    # bert_classifier = BERTClassifier()  # Paused for now - only running LIWC
+    liwc_classifier = LIWCClassifier()
     
     # Load models
-    use_classifier.load_model()
-    bert_classifier.load_model()
+    # use_classifier.load_model()  # Paused for now
+    # bert_classifier.load_model()  # Paused for now
+    # LIWC doesn't need model loading - uses features directly
     
-    # Evaluate USE
-    print("\n" + "="*80)
-    print("STARTING USE EVALUATION")
-    print("="*80)
-    use_results = use_classifier.evaluate_cv(X, y, n_splits=5)
+    # Evaluate USE (PAUSED)
+    # use_results = use_classifier.evaluate_cv(X, y, n_splits=5)
+    use_results = None  # Skip USE for now
     
-    # Evaluate BERT
+    # Evaluate BERT/DistilBERT (PAUSED)
+    # print("\n" + "="*80)
+    # print(f"STARTING {BERT_MODEL_LABEL} EVALUATION")
+    # print("="*80)
+    # bert_results = bert_classifier.evaluate_cv(X, y, n_splits=5)
+    bert_results = None  # Skip BERT for now
+    
+    # Evaluate LIWC
     print("\n" + "="*80)
-    print("STARTING BERT EVALUATION")
+    print("STARTING LIWC FEATURES EVALUATION")
     print("="*80)
-    bert_results = bert_classifier.evaluate_cv(X, y, n_splits=5)
+    liwc_results = liwc_classifier.evaluate_cv(X_liwc, y_liwc, n_splits=5)
     
     # Print summary
-    print_results_summary(use_results, bert_results)
+    print_results_summary(use_results, bert_results, liwc_results)
     
     # Save results
-    save_results_to_csv(use_results, bert_results)
+    save_results_to_csv(use_results, bert_results, liwc_results)
     
     print("Evaluation complete!")
 
