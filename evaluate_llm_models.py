@@ -9,6 +9,8 @@ import numpy as np
 import time
 from tqdm import tqdm
 import warnings
+import subprocess
+import sys
 warnings.filterwarnings('ignore')
 
 # NLTK for sentence tokenization
@@ -22,9 +24,15 @@ from sklearn.ensemble import RandomForestClassifier
 from sklearn.metrics import accuracy_score
 from sklearn.preprocessing import StandardScaler
 
-# TensorFlow and USE imports
-# import tensorflow as tf
-# import tensorflow_hub as hub
+# TensorFlow and USE imports - MOVED TO LAZY IMPORT
+# TensorFlow will only be imported when USE model is actually loaded
+# This avoids random_device errors on systems where TensorFlow has issues
+import os
+# Set environment variables early (before any TensorFlow import attempt)
+os.environ['TF_CPP_MIN_LOG_LEVEL'] = '2'
+os.environ['TF_DETERMINISTIC_OPS'] = '1'
+os.environ['TF_FORCE_GPU_ALLOW_GROWTH'] = 'true'
+os.environ['TF_USE_LEGACY_KERAS'] = '1'
 
 # Transformers and PyTorch imports
 from transformers import AutoTokenizer, AutoModel
@@ -59,13 +67,31 @@ class USEClassifier:
         
     def load_model(self):
         """Load USE model from TensorFlow Hub."""
+        # Lazy import TensorFlow - only import when actually needed
+        # This avoids random_device errors on systems where TensorFlow has issues
+        try:
+            import tensorflow as tf
+            import tensorflow_hub as hub
+        except Exception as e:
+            raise ImportError(f"TensorFlow is not available. Cannot load USE model. Error: {e}")
+        
         print("Loading Universal Sentence Encoder model...")
-        # Configure TensorFlow to avoid mutex issues
-        import os
-        os.environ['TF_CPP_MIN_LOG_LEVEL'] = '1'  # Suppress TensorFlow warnings
+        
         # Set TensorFlow to use single thread to avoid mutex issues
-        tf.config.threading.set_inter_op_parallelism_threads(1)
-        tf.config.threading.set_intra_op_parallelism_threads(1)
+        try:
+            tf.config.threading.set_inter_op_parallelism_threads(1)
+            tf.config.threading.set_intra_op_parallelism_threads(1)
+        except:
+            pass  # Ignore if already configured
+        
+        # Set random seed (use numpy-based approach if tf.random fails)
+        try:
+            tf.random.set_seed(42)
+        except Exception as e:
+            # Fallback: use numpy seed if TensorFlow random fails
+            print(f"Warning: Could not set TensorFlow random seed: {e}")
+            print("Using numpy random seed instead.")
+            np.random.seed(42)
         
         try:
             print("Downloading/loading model from TensorFlow Hub (this may take a few minutes)...")
@@ -86,6 +112,12 @@ class USEClassifier:
     
     def evaluate_cv(self, X, y, n_splits=5):
         """Perform 5-fold cross-validation."""
+        # Convert to numpy array if it's a list
+        if isinstance(X, list):
+            X = np.array(X, dtype=object)
+        if isinstance(y, list):
+            y = np.array(y)
+        
         skf = StratifiedKFold(n_splits=n_splits, shuffle=True, random_state=42)
         fold_accuracies = []
         fold_times = []
@@ -184,6 +216,12 @@ class BERTClassifier:
     
     def evaluate_cv(self, X, y, n_splits=5):
         """Perform 5-fold cross-validation."""
+        # Convert to numpy array if it's a list
+        if isinstance(X, list):
+            X = np.array(X, dtype=object)
+        if isinstance(y, list):
+            y = np.array(y)
+        
         skf = StratifiedKFold(n_splits=n_splits, shuffle=True, random_state=42)
         fold_accuracies = []
         fold_times = []
@@ -381,33 +419,29 @@ def load_liwc_data(filepath):
 
 def print_results_summary(use_results, bert_results, liwc_results=None):
     """Print formatted results summary."""
-    # Handle None results
-    if bert_results is not None:
-        bert_accs, bert_times = bert_results
-    
     print(f"\n{'='*80}")
     print("EVALUATION RESULTS SUMMARY")
     print(f"{'='*80}\n")
     
-    # USE Results (PAUSED)
-    # if use_results is not None:
-    #     use_accs, use_times = use_results
-    #     print("Universal Sentence Encoder (USE):")
-    #     print(f"  Mean Accuracy: {np.mean(use_accs):.4f} ± {np.std(use_accs):.4f}")
-    #     print(f"  Per-fold Accuracies: {[f'{acc:.4f}' for acc in use_accs]}")
-    #     print(f"  Mean Time per Fold: {np.mean(use_times):.2f}s ± {np.std(use_times):.2f}s")
-    #     print(f"  Total Time: {np.sum(use_times):.2f}s")
-    #     print("\n" + "-"*80 + "\n")
+    # USE Results
+    if use_results is not None:
+        use_accs, use_times = use_results
+        print("Universal Sentence Encoder (USE):")
+        print(f"  Mean Accuracy: {np.mean(use_accs):.4f} ± {np.std(use_accs):.4f}")
+        print(f"  Per-fold Accuracies: {[f'{acc:.4f}' for acc in use_accs]}")
+        print(f"  Mean Time per Fold: {np.mean(use_times):.2f}s ± {np.std(use_times):.2f}s")
+        print(f"  Total Time: {np.sum(use_times):.2f}s")
+        print("\n" + "-"*80 + "\n")
     
-    # BERT/DistilBERT Results (PAUSED)
-    # if bert_results is not None:
-    #     bert_accs, bert_times = bert_results
-    #     print(f"{BERT_MODEL_LABEL} ({BERT_MODEL_NAME}):")
-    #     print(f"  Mean Accuracy: {np.mean(bert_accs):.4f} ± {np.std(bert_accs):.4f}")
-    #     print(f"  Per-fold Accuracies: {[f'{acc:.4f}' for acc in bert_accs]}")
-    #     print(f"  Mean Time per Fold: {np.mean(bert_times):.2f}s ± {np.std(bert_times):.2f}s")
-    #     print(f"  Total Time: {np.sum(bert_times):.2f}s")
-    #     print("\n" + "-"*80 + "\n")
+    # BERT/DistilBERT Results
+    if bert_results is not None:
+        bert_accs, bert_times = bert_results
+        print(f"{BERT_MODEL_LABEL} ({BERT_MODEL_NAME}):")
+        print(f"  Mean Accuracy: {np.mean(bert_accs):.4f} ± {np.std(bert_accs):.4f}")
+        print(f"  Per-fold Accuracies: {[f'{acc:.4f}' for acc in bert_accs]}")
+        print(f"  Mean Time per Fold: {np.mean(bert_times):.2f}s ± {np.std(bert_times):.2f}s")
+        print(f"  Total Time: {np.sum(bert_times):.2f}s")
+        print("\n" + "-"*80 + "\n")
     
     # LIWC Results
     if liwc_results is not None:
@@ -418,27 +452,48 @@ def print_results_summary(use_results, bert_results, liwc_results=None):
         print(f"  Mean Time per Fold: {np.mean(liwc_times):.2f}s ± {np.std(liwc_times):.2f}s")
         print(f"  Total Time: {np.sum(liwc_times):.2f}s")
     
+    print("\n" + "-"*80 + "\n")
+    
+    # Comparison
+    print("Comparison:")
+    if use_results is not None and bert_results is not None:
+        use_accs, use_times = use_results
+        bert_accs, bert_times = bert_results
+        print(f"  USE vs {BERT_MODEL_LABEL} Accuracy Difference: {np.mean(bert_accs) - np.mean(use_accs):.4f}")
+        print(f"  Speed Ratio (USE/{BERT_MODEL_LABEL}): {np.mean(use_times) / np.mean(bert_times):.2f}x")
+    
+    if liwc_results is not None:
+        liwc_accs, liwc_times = liwc_results
+        if use_results is not None:
+            use_accs, use_times = use_results
+            print(f"  LIWC vs USE Accuracy Difference: {np.mean(liwc_accs) - np.mean(use_accs):.4f}")
+            print(f"  Speed Ratio (LIWC/USE): {np.mean(liwc_times) / np.mean(use_times):.2f}x")
+        if bert_results is not None:
+            bert_accs, bert_times = bert_results
+            print(f"  LIWC vs {BERT_MODEL_LABEL} Accuracy Difference: {np.mean(liwc_accs) - np.mean(bert_accs):.4f}")
+            print(f"  Speed Ratio (LIWC/{BERT_MODEL_LABEL}): {np.mean(liwc_times) / np.mean(bert_times):.2f}x")
+    
     print(f"\n{'='*80}\n")
 
 
 def save_results_to_csv(use_results, bert_results, liwc_results=None, output_file="evaluation_results.csv"):
     """Save results to CSV file."""
-    # Create base DataFrame with only LIWC results
+    # Create base DataFrame
     results_dict = {
         'Fold': range(1, 6)
     }
     
-    # Add USE results if available (PAUSED for now)
-    # if use_results is not None:
-    #     use_accs, use_times = use_results
-    #     results_dict['USE_Accuracy'] = use_accs
-    #     results_dict['USE_Time'] = use_times
+    # Add USE results if available
+    if use_results is not None:
+        use_accs, use_times = use_results
+        results_dict['USE_Accuracy'] = use_accs
+        results_dict['USE_Time'] = use_times
     
-    # Add BERT results if available (PAUSED for now)
-    # if bert_results is not None:
-    #     bert_accs, bert_times = bert_results
-    #     results_dict['BERT_Accuracy'] = bert_accs
-    #     results_dict['BERT_Time'] = bert_times
+    # Add BERT results if available
+    if bert_results is not None:
+        bert_accs, bert_times = bert_results
+        results_dict['BERT_Accuracy'] = bert_accs
+        results_dict['BERT_Time'] = bert_times
     
     # Add LIWC results if available
     if liwc_results is not None:
@@ -453,15 +508,15 @@ def save_results_to_csv(use_results, bert_results, liwc_results=None, output_fil
         'Fold': ['Mean', 'Std']
     }
     
-    # if use_results is not None:
-    #     use_accs, use_times = use_results
-    #     summary_dict['USE_Accuracy'] = [np.mean(use_accs), np.std(use_accs)]
-    #     summary_dict['USE_Time'] = [np.mean(use_times), np.std(use_times)]
+    if use_results is not None:
+        use_accs, use_times = use_results
+        summary_dict['USE_Accuracy'] = [np.mean(use_accs), np.std(use_accs)]
+        summary_dict['USE_Time'] = [np.mean(use_times), np.std(use_times)]
     
-    # if bert_results is not None:
-    #     bert_accs, bert_times = bert_results
-    #     summary_dict['BERT_Accuracy'] = [np.mean(bert_accs), np.std(bert_accs)]
-    #     summary_dict['BERT_Time'] = [np.mean(bert_times), np.std(bert_times)]
+    if bert_results is not None:
+        bert_accs, bert_times = bert_results
+        summary_dict['BERT_Accuracy'] = [np.mean(bert_accs), np.std(bert_accs)]
+        summary_dict['BERT_Time'] = [np.mean(bert_times), np.std(bert_times)]
     
     if liwc_results is not None:
         liwc_accs, liwc_times = liwc_results
@@ -479,32 +534,78 @@ def main():
     dataset_path = "combined_training_dataset.csv"
     liwc_path = "LIWC-22 Results - combined_training_dataset - LIWC Analysis.csv"
     
-    # Load and preprocess data (SKIPPED - only running LIWC)
-    # X, y = load_and_preprocess_data(dataset_path)  # Not needed for LIWC only
+    # Load and preprocess data (for USE and BERT)
+    X, y = load_and_preprocess_data(dataset_path)
     
     # Load LIWC data
     X_liwc, y_liwc = load_liwc_data(liwc_path)
     
+    # Check if TensorFlow can be imported (using subprocess to avoid crashes)
+    print("\nChecking TensorFlow availability for USE model...")
+    tensorflow_available = False
+    try:
+        # Test TensorFlow import in a subprocess to avoid crashing the main process
+        result = subprocess.run(
+            [sys.executable, '-c', 'import tensorflow as tf; import tensorflow_hub as hub; print("OK")'],
+            capture_output=True,
+            timeout=10,
+            text=True
+        )
+        if result.returncode == 0:
+            tensorflow_available = True
+            print("✓ TensorFlow is available. USE model can be used.")
+        else:
+            print("✗ TensorFlow import failed. USE will be skipped.")
+            print(f"  Error: {result.stderr[:200]}")
+    except subprocess.TimeoutExpired:
+        print("✗ TensorFlow import timed out. USE will be skipped.")
+    except Exception as e:
+        print(f"✗ Could not test TensorFlow: {e}. USE will be skipped.")
+    
     # Initialize models
-    # use_classifier = USEClassifier()  # Paused for now
-    # bert_classifier = BERTClassifier()  # Paused for now - only running LIWC
+    bert_classifier = BERTClassifier()  # Uses config: BERT_MODEL_NAME and BERT_BATCH_SIZE
     liwc_classifier = LIWCClassifier()
     
+    # Try to initialize USE only if TensorFlow is available
+    use_classifier = None
+    use_results = None
+    
+    if tensorflow_available:
+        print("\nAttempting to initialize USE model...")
+        try:
+            use_classifier = USEClassifier()
+            print("USE classifier created. Loading model...")
+            use_classifier.load_model()
+            print("USE model loaded successfully!\n")
+        except Exception as e:
+            print(f"\n⚠️  Warning: Could not initialize USE model: {e}")
+            print("Skipping USE evaluation. Continuing with BERT and LIWC only.\n")
+            use_classifier = None
+    else:
+        print("\n⚠️  Skipping USE evaluation (TensorFlow not available).")
+        print("Continuing with BERT and LIWC only.\n")
+    
     # Load models
-    # use_classifier.load_model()  # Paused for now
-    # bert_classifier.load_model()  # Paused for now
+    bert_classifier.load_model()
     # LIWC doesn't need model loading - uses features directly
     
-    # Evaluate USE (PAUSED)
-    # use_results = use_classifier.evaluate_cv(X, y, n_splits=5)
-    use_results = None  # Skip USE for now
+    # Evaluate USE (if available)
+    if use_classifier is not None:
+        print("\n" + "="*80)
+        print("STARTING USE EVALUATION")
+        print("="*80)
+        try:
+            use_results = use_classifier.evaluate_cv(X, y, n_splits=5)
+        except Exception as e:
+            print(f"Error during USE evaluation: {e}")
+            print("Skipping USE results. Continuing with BERT and LIWC.\n")
+            use_results = None
     
-    # Evaluate BERT/DistilBERT (PAUSED)
-    # print("\n" + "="*80)
-    # print(f"STARTING {BERT_MODEL_LABEL} EVALUATION")
-    # print("="*80)
-    # bert_results = bert_classifier.evaluate_cv(X, y, n_splits=5)
-    bert_results = None  # Skip BERT for now
+    # Evaluate BERT/DistilBERT
+    print("\n" + "="*80)
+    print(f"STARTING {BERT_MODEL_LABEL} EVALUATION")
+    print("="*80)
+    bert_results = bert_classifier.evaluate_cv(X, y, n_splits=5)
     
     # Evaluate LIWC
     print("\n" + "="*80)
