@@ -534,21 +534,23 @@ def main():
     dataset_path = "combined_training_dataset.csv"
     liwc_path = "LIWC-22 Results - combined_training_dataset - LIWC Analysis.csv"
     
-    # Load and preprocess data (for USE and BERT)
+    # Load and preprocess data (for USE)
     X, y = load_and_preprocess_data(dataset_path)
     
-    # Load LIWC data
-    X_liwc, y_liwc = load_liwc_data(liwc_path)
+    # Load LIWC data (COMMENTED OUT - only running USE)
+    # X_liwc, y_liwc = load_liwc_data(liwc_path)
     
     # Check if TensorFlow can be imported (using subprocess to avoid crashes)
     print("\nChecking TensorFlow availability for USE model...")
+    print("(This may take 30-60 seconds on first run as TensorFlow initializes...)")
     tensorflow_available = False
     try:
         # Test TensorFlow import in a subprocess to avoid crashing the main process
+        # Increased timeout to 60 seconds as TensorFlow can take time to initialize
         result = subprocess.run(
             [sys.executable, '-c', 'import tensorflow as tf; import tensorflow_hub as hub; print("OK")'],
             capture_output=True,
-            timeout=10,
+            timeout=60,  # Increased from 10 to 60 seconds
             text=True
         )
         if result.returncode == 0:
@@ -556,37 +558,44 @@ def main():
             print("✓ TensorFlow is available. USE model can be used.")
         else:
             print("✗ TensorFlow import failed. USE will be skipped.")
-            print(f"  Error: {result.stderr[:200]}")
+            if result.stderr:
+                print(f"  Error: {result.stderr[:300]}")
     except subprocess.TimeoutExpired:
-        print("✗ TensorFlow import timed out. USE will be skipped.")
+        print("✗ TensorFlow import timed out after 60 seconds.")
+        print("  This might indicate TensorFlow is hanging. Trying direct import anyway...")
+        # Try direct import as fallback (might work even if subprocess timed out)
+        tensorflow_available = True  # Set to True to attempt direct import
     except Exception as e:
-        print(f"✗ Could not test TensorFlow: {e}. USE will be skipped.")
+        print(f"✗ Could not test TensorFlow: {e}")
+        print("  Trying direct import anyway...")
+        tensorflow_available = True  # Set to True to attempt direct import
     
-    # Initialize models
-    bert_classifier = BERTClassifier()  # Uses config: BERT_MODEL_NAME and BERT_BATCH_SIZE
-    liwc_classifier = LIWCClassifier()
+    # Initialize models (COMMENTED OUT - only running USE)
+    # bert_classifier = BERTClassifier()  # Uses config: BERT_MODEL_NAME and BERT_BATCH_SIZE
+    # liwc_classifier = LIWCClassifier()
     
-    # Try to initialize USE only if TensorFlow is available
+    # Try to initialize USE (will attempt even if subprocess check failed)
     use_classifier = None
     use_results = None
     
-    if tensorflow_available:
-        print("\nAttempting to initialize USE model...")
-        try:
-            use_classifier = USEClassifier()
-            print("USE classifier created. Loading model...")
-            use_classifier.load_model()
-            print("USE model loaded successfully!\n")
-        except Exception as e:
-            print(f"\n⚠️  Warning: Could not initialize USE model: {e}")
-            print("Skipping USE evaluation. Continuing with BERT and LIWC only.\n")
-            use_classifier = None
-    else:
-        print("\n⚠️  Skipping USE evaluation (TensorFlow not available).")
-        print("Continuing with BERT and LIWC only.\n")
+    print("\nAttempting to initialize USE model...")
+    try:
+        use_classifier = USEClassifier()
+        print("USE classifier created. Loading model...")
+        use_classifier.load_model()
+        print("USE model loaded successfully!\n")
+        tensorflow_available = True  # Mark as available if we got here
+    except ImportError as e:
+        print(f"\n⚠️  Import Error: Could not import TensorFlow: {e}")
+        print("USE evaluation cannot proceed.\n")
+        use_classifier = None
+    except Exception as e:
+        print(f"\n⚠️  Warning: Could not initialize USE model: {e}")
+        print("USE evaluation failed.\n")
+        use_classifier = None
     
-    # Load models
-    bert_classifier.load_model()
+    # Load models (COMMENTED OUT - only running USE)
+    # bert_classifier.load_model()
     # LIWC doesn't need model loading - uses features directly
     
     # Evaluate USE (if available)
@@ -598,20 +607,22 @@ def main():
             use_results = use_classifier.evaluate_cv(X, y, n_splits=5)
         except Exception as e:
             print(f"Error during USE evaluation: {e}")
-            print("Skipping USE results. Continuing with BERT and LIWC.\n")
+            print("USE evaluation failed.\n")
             use_results = None
     
-    # Evaluate BERT/DistilBERT
-    print("\n" + "="*80)
-    print(f"STARTING {BERT_MODEL_LABEL} EVALUATION")
-    print("="*80)
-    bert_results = bert_classifier.evaluate_cv(X, y, n_splits=5)
+    # Evaluate BERT/DistilBERT (COMMENTED OUT - only running USE)
+    # print("\n" + "="*80)
+    # print(f"STARTING {BERT_MODEL_LABEL} EVALUATION")
+    # print("="*80)
+    # bert_results = bert_classifier.evaluate_cv(X, y, n_splits=5)
+    bert_results = None  # Skip BERT for now
     
-    # Evaluate LIWC
-    print("\n" + "="*80)
-    print("STARTING LIWC FEATURES EVALUATION")
-    print("="*80)
-    liwc_results = liwc_classifier.evaluate_cv(X_liwc, y_liwc, n_splits=5)
+    # Evaluate LIWC (COMMENTED OUT - only running USE)
+    # print("\n" + "="*80)
+    # print("STARTING LIWC FEATURES EVALUATION")
+    # print("="*80)
+    # liwc_results = liwc_classifier.evaluate_cv(X_liwc, y_liwc, n_splits=5)
+    liwc_results = None  # Skip LIWC for now
     
     # Print summary
     print_results_summary(use_results, bert_results, liwc_results)
