@@ -508,6 +508,47 @@ def load_and_preprocess_data(filepath):
     return X, y
 
 
+def load_and_preprocess_data_full_text(filepath):
+    """Load and preprocess the dataset without extracting first sentence (for TF-IDF)."""
+    print(f"Loading dataset from {filepath}...")
+    df = pd.read_csv(filepath)
+    
+    print(f"Dataset shape: {df.shape}")
+    print(f"Columns: {df.columns.tolist()}")
+    
+    # Check for missing values in content column
+    missing_content = df['content'].isna().sum()
+    print(f"Missing values in 'content': {missing_content}")
+    
+    # Handle missing values
+    df = df.dropna(subset=['content'])
+    
+    # Check target variable
+    print(f"\nTarget variable 'is_ai_flagged' distribution:")
+    print(df['is_ai_flagged'].value_counts())
+    print(f"Class balance: {df['is_ai_flagged'].value_counts(normalize=True)}")
+    
+    # Prepare data
+    X = df['content'].values
+    y = df['is_ai_flagged'].values
+    
+    # Convert text to string if needed
+    X = [str(text) for text in X]
+    
+    # Keep full text (no first sentence extraction for TF-IDF)
+    print("\nUsing full text for TF-IDF (no sentence extraction)...")
+    
+    # Filter out empty texts
+    valid_indices = [i for i, text in enumerate(X) if text.strip()]
+    X = [X[i] for i in valid_indices]
+    y = [y[i] for i in valid_indices]
+    
+    print(f"\nFinal dataset size: {len(X)} samples")
+    print(f"Sample full text (first 100 chars): {X[0][:100]}..." if X else "No samples")
+    
+    return X, y
+
+
 def load_liwc_data(filepath):
     """Load and preprocess LIWC features dataset."""
     print(f"\nLoading LIWC dataset from {filepath}...")
@@ -855,8 +896,8 @@ def main():
     dataset_path = "combined_training_dataset.csv"
     # liwc_path = "LIWC-22 Results - combined_training_dataset - LIWC Analysis.csv"
     
-    # Load and preprocess data (for TF-IDF)
-    X, y = load_and_preprocess_data(dataset_path)
+    # Load and preprocess data (for TF-IDF - using full text, not first sentence)
+    X, y = load_and_preprocess_data_full_text(dataset_path)
     
     # Load LIWC data (commented out for TF-IDF only branch)
     # X_liwc, y_liwc = load_liwc_data(liwc_path)
