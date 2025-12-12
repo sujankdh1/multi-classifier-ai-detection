@@ -5,3 +5,5 @@ tensorflow-hub>=0.15.0
 transformers>=4.30.0
 tqdm>=4.65.0
 nltk>=3.8.0
+shap>=0.42.0
+matplotlib>=3.7.0
