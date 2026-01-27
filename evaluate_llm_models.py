@@ -242,26 +242,26 @@ def perform_shap_analysis(X, y, feature_names, output_dir="shap_results", n_samp
     print("SHAP values computed successfully!")
     print(f"  Final shap_values_class1 shape: {shap_values_class1.shape}")
     
-    # 1. Summary plot (bar plot of mean absolute SHAP values)
-    print("\nGenerating SHAP summary plots...")
-    plt.figure(figsize=(18, len(feature_names) * 0.3)) # Increase height for all features
-    shap.summary_plot(shap_values_class1, X_explain, feature_names=feature_names, 
-                 plot_type="bar", show=False, max_display=len(feature_names)) # Use all features
-    plt.tight_layout()
-    plt.savefig(os.path.join(output_dir, "shap_summary_bar.png"), dpi=300, bbox_inches='tight')
-    plt.close()
-    print(f"  Saved: {output_dir}/shap_summary_bar.png")
+    # 1. Summary plot (bar plot of mean absolute SHAP values) - COMMENTED OUT
+    # print("\nGenerating SHAP summary plots...")
+    # plt.figure(figsize=(18, len(feature_names) * 0.3)) # Increase height for all features
+    # shap.summary_plot(shap_values_class1, X_explain, feature_names=feature_names, 
+    #              plot_type="bar", show=False, max_display=len(feature_names)) # Use all features
+    # plt.tight_layout()
+    # plt.savefig(os.path.join(output_dir, "shap_summary_bar.png"), dpi=300, bbox_inches='tight')
+    # plt.close()
+    # print(f"  Saved: {output_dir}/shap_summary_bar.png")
     
-    # 2. Summary plot (beeswarm plot)
-    plt.figure(figsize=(18, len(feature_names) * 0.3)) # Increase height for all features
+    # 2. Summary plot (beeswarm plot) - KEEP THIS ONE
+    plt.figure(figsize=(12, 10))
     shap.summary_plot(shap_values_class1, X_explain, feature_names=feature_names, 
-                 plot_type="dot", show=False, max_display=len(feature_names)) # Use all features
+                     plot_type="dot", show=False, max_display=30)
     plt.tight_layout()
     plt.savefig(os.path.join(output_dir, "shap_summary_beeswarm.png"), dpi=300, bbox_inches='tight')
     plt.close()
     print(f"  Saved: {output_dir}/shap_summary_beeswarm.png")
     
-    # 3. Feature importance ranking
+    # 3. Feature importance ranking - COMMENTED OUT
     # Ensure shap_values_class1 is 2D: (n_samples, n_features)
     if len(shap_values_class1.shape) == 1:
         shap_values_class1 = shap_values_class1.reshape(-1, len(feature_names))
@@ -286,44 +286,44 @@ def perform_shap_analysis(X, y, feature_names, output_dir="shap_results", n_samp
                 f"Array shape: {shap_values_class1.shape}"
             )
     
-    mean_abs_shap = np.abs(shap_values_class1).mean(axis=0)
-    std_shap = shap_values_class1.std(axis=0)
+    # mean_abs_shap = np.abs(shap_values_class1).mean(axis=0)
+    # std_shap = shap_values_class1.std(axis=0)
     
-    # Explicitly ensure arrays are 1D (flatten if needed)
-    mean_abs_shap = np.asarray(mean_abs_shap).flatten()
-    std_shap = np.asarray(std_shap).flatten()
+    # # Explicitly ensure arrays are 1D (flatten if needed)
+    # mean_abs_shap = np.asarray(mean_abs_shap).flatten()
+    # std_shap = np.asarray(std_shap).flatten()
     
-    # Verify lengths match
-    if len(mean_abs_shap) != len(feature_names):
-        raise ValueError(
-            f"Length mismatch: mean_abs_shap has {len(mean_abs_shap)} elements, "
-            f"but feature_names has {len(feature_names)} features. "
-            f"shap_values_class1 shape: {shap_values_class1.shape}"
-        )
-    if len(std_shap) != len(feature_names):
-        raise ValueError(
-            f"Length mismatch: std_shap has {len(std_shap)} elements, "
-            f"but feature_names has {len(feature_names)} features"
-        )
+    # # Verify lengths match
+    # if len(mean_abs_shap) != len(feature_names):
+    #     raise ValueError(
+    #         f"Length mismatch: mean_abs_shap has {len(mean_abs_shap)} elements, "
+    #         f"but feature_names has {len(feature_names)} features. "
+    #         f"shap_values_class1 shape: {shap_values_class1.shape}"
+    #     )
+    # if len(std_shap) != len(feature_names):
+    #     raise ValueError(
+    #         f"Length mismatch: std_shap has {len(std_shap)} elements, "
+    #         f"but feature_names has {len(feature_names)} features"
+    #     )
     
-    feature_importance_df = pd.DataFrame({
-        'Feature': feature_names,
-        'Mean_Abs_SHAP': mean_abs_shap,
-        'Std_SHAP': std_shap
-    }).sort_values('Mean_Abs_SHAP', ascending=False)
+    # feature_importance_df = pd.DataFrame({
+    #     'Feature': feature_names,
+    #     'Mean_Abs_SHAP': mean_abs_shap,
+    #     'Std_SHAP': std_shap
+    # }).sort_values('Mean_Abs_SHAP', ascending=False)
     
-    feature_importance_df.to_csv(
-        os.path.join(output_dir, "shap_feature_importance.csv"), 
-        index=False
-    )
-    print(f"  Saved: {output_dir}/shap_feature_importance.csv")
+    # feature_importance_df.to_csv(
+    #     os.path.join(output_dir, "shap_feature_importance.csv"), 
+    #     index=False
+    # )
+    # print(f"  Saved: {output_dir}/shap_feature_importance.csv")
     
    
-    print(f"\nAll {len(feature_names)} LIWC Features Ranked by SHAP:")
-    print("-" * 80)
-    # Loop over the entire sorted DataFrame (using len(feature_importance_df))
-    for idx, row in feature_importance_df.iterrows():
-      print(f"{row['Feature']:30s} | Mean |SHAP|: {row['Mean_Abs_SHAP']:8.4f}")
+    # print(f"\nAll {len(feature_names)} LIWC Features Ranked by SHAP:")
+    # print("-" * 80)
+    # # Loop over the entire sorted DataFrame (using len(feature_importance_df))
+    # for idx, row in feature_importance_df.iterrows():
+    #   print(f"{row['Feature']:30s} | Mean |SHAP|: {row['Mean_Abs_SHAP']:8.4f}")
     
     # 4. Save SHAP values for all samples
     shap_values_df = pd.DataFrame(
@@ -336,75 +336,75 @@ def perform_shap_analysis(X, y, feature_names, output_dir="shap_results", n_samp
     )
     print(f"\n  Saved: {output_dir}/shap_values.csv")
     
-    # 5. Waterfall plot for a single example (first instance)
-    print("\nGenerating example waterfall plot...")
-    try:
-        # Extract base value properly (handle array/list cases)
-        if isinstance(explainer.expected_value, (list, np.ndarray)):
-            if len(explainer.expected_value) > 1:
-                base_value = float(explainer.expected_value[1])  # Class 1 (positive class)
-            else:
-                base_value = float(explainer.expected_value[0])
-        else:
-            base_value = float(explainer.expected_value)
-        
-        plt.figure(figsize=(12, 8))
-        shap.waterfall_plot(
-            shap.Explanation(
-                values=shap_values_class1[0],
-                base_values=base_value,
-                data=X_explain[0],
-                feature_names=feature_names
-            ),
-            show=False,
-            max_display=20
-        )
-        plt.tight_layout()
-        plt.savefig(os.path.join(output_dir, "shap_waterfall_example.png"), dpi=300, bbox_inches='tight')
-        plt.close()
-        print(f"  Saved: {output_dir}/shap_waterfall_example.png")
-    except Exception as e:
-        print(f"  Warning: Could not generate waterfall plot: {e}")
-        print("  Skipping waterfall plot...")
+    # 5. Waterfall plot for a single example (first instance) - COMMENTED OUT
+    # print("\nGenerating example waterfall plot...")
+    # try:
+    #     # Extract base value properly (handle array/list cases)
+    #     if isinstance(explainer.expected_value, (list, np.ndarray)):
+    #         if len(explainer.expected_value) > 1:
+    #             base_value = float(explainer.expected_value[1])  # Class 1 (positive class)
+    #         else:
+    #             base_value = float(explainer.expected_value[0])
+    #     else:
+    #         base_value = float(explainer.expected_value)
+    #     
+    #     plt.figure(figsize=(12, 8))
+    #     shap.waterfall_plot(
+    #         shap.Explanation(
+    #             values=shap_values_class1[0],
+    #             base_values=base_value,
+    #             data=X_explain[0],
+    #             feature_names=feature_names
+    #         ),
+    #         show=False,
+    #         max_display=20
+    #     )
+    #     plt.tight_layout()
+    #     plt.savefig(os.path.join(output_dir, "shap_waterfall_example.png"), dpi=300, bbox_inches='tight')
+    #     plt.close()
+    #     print(f"  Saved: {output_dir}/shap_waterfall_example.png")
+    # except Exception as e:
+    #     print(f"  Warning: Could not generate waterfall plot: {e}")
+    #     print("  Skipping waterfall plot...")
     
-    # 6. Dependence plots for top features
-    print("\nGenerating dependence plots for top 5 features...")
-    top_features = feature_importance_df.head(5)['Feature'].tolist()
-    top_feature_indices = [feature_names.index(f) for f in top_features]
-    
-    try:
-        fig, axes = plt.subplots(2, 3, figsize=(18, 12))
-        axes = axes.flatten()
-        
-        for i, (feature, idx) in enumerate(zip(top_features[:5], top_feature_indices[:5])):
-            # Find the feature with highest interaction
-            interaction_idx = np.abs(shap_values_class1[:, idx]).argmax()
-            shap.dependence_plot(
-                idx, shap_values_class1, X_explain,
-                feature_names=feature_names,
-                interaction_index='auto',
-                ax=axes[i],
-                show=False
-            )
-            axes[i].set_title(f'Dependence: {feature}', fontsize=10)
-        
-        # Remove extra subplot
-        axes[5].remove()
-        
-        plt.tight_layout()
-        plt.savefig(os.path.join(output_dir, "shap_dependence_plots.png"), dpi=300, bbox_inches='tight')
-        plt.close()
-        print(f"  Saved: {output_dir}/shap_dependence_plots.png")
-    except Exception as e:
-        print(f"  Warning: Could not generate dependence plots: {e}")
-        print("  Skipping dependence plots...")
+    # 6. Dependence plots for top features - COMMENTED OUT
+    # print("\nGenerating dependence plots for top 5 features...")
+    # top_features = feature_importance_df.head(5)['Feature'].tolist()
+    # top_feature_indices = [feature_names.index(f) for f in top_features]
+    # 
+    # try:
+    #     fig, axes = plt.subplots(2, 3, figsize=(18, 12))
+    #     axes = axes.flatten()
+    #     
+    #     for i, (feature, idx) in enumerate(zip(top_features[:5], top_feature_indices[:5])):
+    #         # Find the feature with highest interaction
+    #         interaction_idx = np.abs(shap_values_class1[:, idx]).argmax()
+    #         shap.dependence_plot(
+    #             idx, shap_values_class1, X_explain,
+    #             feature_names=feature_names,
+    #             interaction_index='auto',
+    #             ax=axes[i],
+    #             show=False
+    #         )
+    #         axes[i].set_title(f'Dependence: {feature}', fontsize=10)
+    #     
+    #     # Remove extra subplot
+    #     axes[5].remove()
+    #     
+    #     plt.tight_layout()
+    #     plt.savefig(os.path.join(output_dir, "shap_dependence_plots.png"), dpi=300, bbox_inches='tight')
+    #     plt.close()
+    #     print(f"  Saved: {output_dir}/shap_dependence_plots.png")
+    # except Exception as e:
+    #     print(f"  Warning: Could not generate dependence plots: {e}")
+    #     print("  Skipping dependence plots...")
     
     print(f"\n{'='*80}")
     print("SHAP Analysis Complete!")
     print(f"All results saved to: {output_dir}/")
     print(f"{'='*80}\n")
     
-    return feature_importance_df
+    return None  # Changed from feature_importance_df since we're not computing it anymore
 
 
 def main():
