@@ -262,75 +262,71 @@ class BERTClassifier:
         return fold_accuracies, fold_times
 
 
-class LIWCClassifier:
-    """LIWC features classifier with 5-fold cross-validation."""
-    
-    def __init__(self):
-        self.classifier = RandomForestClassifier(n_estimators=100, random_state=42, n_jobs=-1)
-        self.scaler = StandardScaler()
-        
-    def evaluate_cv(self, X, y, n_splits=5):
-        """Perform 5-fold cross-validation on LIWC features."""
-        skf = StratifiedKFold(n_splits=n_splits, shuffle=True, random_state=42)
-        fold_accuracies = []
-        fold_times = []
-        
-        print(f"\n{'='*60}")
-        print("LIWC Features - 5-Fold Cross-Validation")
-        print(f"{'='*60}")
-        
-        for fold, (train_idx, val_idx) in enumerate(skf.split(X, y), 1):
-            print(f"\nFold {fold}/{n_splits}")
-            
-            # Split data
-            X_train, X_val = X[train_idx], X[val_idx]
-            y_train, y_val = y[train_idx], y[val_idx]
-            
-            # Scale features
-            start_time = time.time()
-            X_train_scaled = self.scaler.fit_transform(X_train)
-            X_val_scaled = self.scaler.transform(X_val)
-            
-            # Train classifier
-            self.classifier.fit(X_train_scaled, y_train)
-            
-            # Predict and evaluate
-            y_pred = self.classifier.predict(X_val_scaled)
-            accuracy = accuracy_score(y_val, y_pred)
-            
-            fold_time = time.time() - start_time
-            fold_accuracies.append(accuracy)
-            fold_times.append(fold_time)
-            
-            print(f"  Accuracy: {accuracy:.4f} | Time: {fold_time:.2f}s")
-        
-        return fold_accuracies, fold_times
-
-
-def get_first_sentence(text):
-    """Extract first sentence from text using NLTK tokenizer."""
+def get_first_n_sentences(text, n_sentences=10, max_chars=6000):
+    """Extract the first N sentences from text (for USE + BERT)."""
     if not text or pd.isna(text):
         return ""
-    
+
     text = str(text).strip()
     if not text:
         return ""
-    
-    # Skip empty lines and very short lines
-    lines = text.split('\n')
-    for line in lines:
-        line = line.strip()
-        if line and len(line) > 10:  # Skip very short lines
-            sentences = sent_tokenize(line)
-            if sentences:
-                return sentences[0]
-    
-    # Fallback: return first 200 characters if no sentence found
-    return text[:200].strip()
+
+    # Sentence tokenize; fall back to char-slice if tokenization fails
+    try:
+        sentences = sent_tokenize(text)
+    except Exception:
+        sentences = []
+
+    if sentences:
+        selected = " ".join(sentences[:n_sentences]).strip()
+    else:
+        selected = text
+
+    # Keep input reasonably bounded (USE can take long text, but this keeps runtime stable)
+    if len(selected) > max_chars:
+        selected = selected[:max_chars].rsplit(" ", 1)[0].strip()
+
+    return selected
 
 
-def load_and_preprocess_data(filepath):
-    """Load and preprocess the dataset."""
+# Backwards-compatible name used elsewhere in the script
+def get_first_sentence(text):
+    """Legacy alias: now returns the first ~10 sentences."""
+    return get_first_n_sentences(text, n_sentences=10, max_chars=6000)
+
+
+# Lazy-loaded tokenizer for token-based truncation (USE with 512-token limit)
+_truncate_tokenizer = None
+
+
+def get_truncate_tokenizer():
+    """Get or create tokenizer for truncating text to N tokens (same as BERT/DistilBERT)."""
+    global _truncate_tokenizer
+    if _truncate_tokenizer is None:
+        _truncate_tokenizer = AutoTokenizer.from_pretrained(BERT_MODEL_NAME)
+    return _truncate_tokenizer
+
+
+def truncate_to_max_tokens(text, max_tokens=512):
+    """Truncate text to at most max_tokens (WordPiece tokens, same definition as BERT)."""
+    if not text or pd.isna(text):
+        return ""
+    text = str(text).strip()
+    if not text:
+        return ""
+    tokenizer = get_truncate_tokenizer()
+    tokens = tokenizer.encode(text, add_special_tokens=False, max_length=max_tokens, truncation=True)
+    return tokenizer.decode(tokens, skip_special_tokens=True).strip()
+
+
+def load_and_preprocess_data(filepath, text_mode="sentences", n_sentences=10, max_chars=6000, max_tokens=None):
+    """Load and preprocess the dataset.
+
+    text_mode:
+      - "sentences": use first n_sentences capped by max_chars
+      - "full": use the full text; if max_chars is None, no cap (whole text); else capped at max_chars
+    max_tokens: if set (e.g. 512), truncate each text to this many tokens (WordPiece, same as BERT) after other preprocessing
+    """
     print(f"Loading dataset from {filepath}...")
     df = pd.read_csv(filepath)
     
@@ -356,10 +352,27 @@ def load_and_preprocess_data(filepath):
     # Convert text to string if needed
     X = [str(text) for text in X]
     
-    # Extract first sentence from each text
-    print("\nExtracting first sentence from each text...")
-    X = [get_first_sentence(text) for text in tqdm(X, desc="Processing texts")]
-    
+    if text_mode == "full":
+        if max_chars is None:
+            print("\nUsing full text (no character cap) for USE...")
+            X = [str(text).strip() for text in tqdm(X, desc="Processing texts")]
+        else:
+            print(f"\nUsing full text (capped at {max_chars} chars)...")
+            X = [
+                str(text)[:max_chars].rsplit(" ", 1)[0].strip() if len(str(text)) > max_chars else str(text).strip()
+                for text in tqdm(X, desc="Processing texts")
+            ]
+    else:
+        # Sentence-windowed input (USE-friendly) while BERT/DistilBERT will still respect
+        # its tokenizer max_length (512 tokens) via truncation.
+        print(f"\nExtracting first {n_sentences} sentences from each text (cap {max_chars} chars)...")
+        X = [get_first_n_sentences(text, n_sentences=n_sentences, max_chars=max_chars)
+             for text in tqdm(X, desc="Processing texts")]
+
+    if max_tokens is not None:
+        print(f"\nTruncating each text to {max_tokens} tokens (WordPiece, for USE)...")
+        X = [truncate_to_max_tokens(t, max_tokens=max_tokens) for t in tqdm(X, desc="Truncating to tokens")]
+
     # Filter out empty texts
     valid_indices = [i for i, text in enumerate(X) if text.strip()]
     X = [X[i] for i in valid_indices]
@@ -376,48 +389,7 @@ def load_and_preprocess_data(filepath):
     return X, y
 
 
-def load_liwc_data(filepath):
-    """Load and preprocess LIWC features dataset."""
-    print(f"\nLoading LIWC dataset from {filepath}...")
-    df = pd.read_csv(filepath)
-    
-    print(f"LIWC dataset shape: {df.shape}")
-    
-    # Metadata columns to exclude
-    metadata_cols = ['pageid', 'title', 'content', 'categories', 'is_ai_flagged', 'Segment']
-    
-    # Get LIWC feature columns (all columns except metadata)
-    liwc_feature_cols = [col for col in df.columns if col not in metadata_cols]
-    print(f"Number of LIWC features: {len(liwc_feature_cols)}")
-    
-    # Check for missing values
-    missing_values = df[liwc_feature_cols].isna().sum().sum()
-    print(f"Missing values in LIWC features: {missing_values}")
-    
-    # Handle missing values
-    df = df.dropna(subset=liwc_feature_cols)
-    
-    # Check target variable
-    print(f"\nTarget variable 'is_ai_flagged' distribution:")
-    print(df['is_ai_flagged'].value_counts())
-    print(f"Class balance: {df['is_ai_flagged'].value_counts(normalize=True)}")
-    
-    # Extract features and labels
-    X = df[liwc_feature_cols].values.astype(np.float32)
-    y = df['is_ai_flagged'].values
-    
-    # Use full dataset (no sample limit)
-    # print(f"\nLimiting to 10 samples for testing...")
-    # X = X[:10]
-    # y = y[:10]
-    
-    print(f"\nFinal LIWC dataset size: {len(X)} samples")
-    print(f"Number of features: {X.shape[1]}")
-    
-    return X, y
-
-
-def print_results_summary(use_results, bert_results, liwc_results=None):
+def print_results_summary(use_results, bert_results):
     """Print formatted results summary."""
     print(f"\n{'='*80}")
     print("EVALUATION RESULTS SUMMARY")
@@ -443,15 +415,6 @@ def print_results_summary(use_results, bert_results, liwc_results=None):
         print(f"  Total Time: {np.sum(bert_times):.2f}s")
         print("\n" + "-"*80 + "\n")
     
-    # LIWC Results
-    if liwc_results is not None:
-        liwc_accs, liwc_times = liwc_results
-        print("LIWC Features:")
-        print(f"  Mean Accuracy: {np.mean(liwc_accs):.4f} ± {np.std(liwc_accs):.4f}")
-        print(f"  Per-fold Accuracies: {[f'{acc:.4f}' for acc in liwc_accs]}")
-        print(f"  Mean Time per Fold: {np.mean(liwc_times):.2f}s ± {np.std(liwc_times):.2f}s")
-        print(f"  Total Time: {np.sum(liwc_times):.2f}s")
-    
     print("\n" + "-"*80 + "\n")
     
     # Comparison
@@ -462,21 +425,10 @@ def print_results_summary(use_results, bert_results, liwc_results=None):
         print(f"  USE vs {BERT_MODEL_LABEL} Accuracy Difference: {np.mean(bert_accs) - np.mean(use_accs):.4f}")
         print(f"  Speed Ratio (USE/{BERT_MODEL_LABEL}): {np.mean(use_times) / np.mean(bert_times):.2f}x")
     
-    if liwc_results is not None:
-        liwc_accs, liwc_times = liwc_results
-        if use_results is not None:
-            use_accs, use_times = use_results
-            print(f"  LIWC vs USE Accuracy Difference: {np.mean(liwc_accs) - np.mean(use_accs):.4f}")
-            print(f"  Speed Ratio (LIWC/USE): {np.mean(liwc_times) / np.mean(use_times):.2f}x")
-        if bert_results is not None:
-            bert_accs, bert_times = bert_results
-            print(f"  LIWC vs {BERT_MODEL_LABEL} Accuracy Difference: {np.mean(liwc_accs) - np.mean(bert_accs):.4f}")
-            print(f"  Speed Ratio (LIWC/{BERT_MODEL_LABEL}): {np.mean(liwc_times) / np.mean(bert_times):.2f}x")
-    
     print(f"\n{'='*80}\n")
 
 
-def save_results_to_csv(use_results, bert_results, liwc_results=None, output_file="evaluation_results.csv"):
+def save_results_to_csv(use_results, bert_results, output_file="evaluation_results.csv"):
     """Save results to CSV file."""
     # Create base DataFrame
     results_dict = {
@@ -495,12 +447,6 @@ def save_results_to_csv(use_results, bert_results, liwc_results=None, output_fil
         results_dict['BERT_Accuracy'] = bert_accs
         results_dict['BERT_Time'] = bert_times
     
-    # Add LIWC results if available
-    if liwc_results is not None:
-        liwc_accs, liwc_times = liwc_results
-        results_dict['LIWC_Accuracy'] = liwc_accs
-        results_dict['LIWC_Time'] = liwc_times
-    
     results_df = pd.DataFrame(results_dict)
     
     # Add summary row
@@ -518,11 +464,6 @@ def save_results_to_csv(use_results, bert_results, liwc_results=None, output_fil
         summary_dict['BERT_Accuracy'] = [np.mean(bert_accs), np.std(bert_accs)]
         summary_dict['BERT_Time'] = [np.mean(bert_times), np.std(bert_times)]
     
-    if liwc_results is not None:
-        liwc_accs, liwc_times = liwc_results
-        summary_dict['LIWC_Accuracy'] = [np.mean(liwc_accs), np.std(liwc_accs)]
-        summary_dict['LIWC_Time'] = [np.mean(liwc_times), np.std(liwc_times)]
-    
     summary_row = pd.DataFrame(summary_dict)
     results_df = pd.concat([results_df, summary_row], ignore_index=True)
     results_df.to_csv(output_file, index=False)
@@ -532,45 +473,51 @@ def save_results_to_csv(use_results, bert_results, liwc_results=None, output_fil
 def main():
     """Main evaluation pipeline."""
     dataset_path = "combined_training_dataset.csv"
-    liwc_path = "LIWC-22 Results - combined_training_dataset - LIWC Analysis.csv"
-    
-    # Load and preprocess data (for USE and BERT)
-    X, y = load_and_preprocess_data(dataset_path)
-    
-    # Load LIWC data
-    X_liwc, y_liwc = load_liwc_data(liwc_path)
+    RUN_USE = True   # USE only (DistilBERT and LIWC commented out)
+    # RUN_DISTILBERT = False  # commented out: DistilBERT not used
+
+    # Load and preprocess data (full text for USE)
+    # if RUN_DISTILBERT and not RUN_USE:
+    #     X, y = load_and_preprocess_data(dataset_path, text_mode="full", max_chars=20000)
+    # else:
+    #     X, y = load_and_preprocess_data(dataset_path, text_mode="sentences", n_sentences=10, max_chars=6000)
+    X, y = load_and_preprocess_data(dataset_path, text_mode="full", max_chars=None, max_tokens=512)  # USE only, 512 tokens max
     
     # Check if TensorFlow can be imported (using subprocess to avoid crashes)
-    print("\nChecking TensorFlow availability for USE model...")
+    # Only needed when RUN_USE is enabled.
     tensorflow_available = False
-    try:
-        # Test TensorFlow import in a subprocess to avoid crashing the main process
-        result = subprocess.run(
-            [sys.executable, '-c', 'import tensorflow as tf; import tensorflow_hub as hub; print("OK")'],
-            capture_output=True,
-            timeout=10,
-            text=True
-        )
-        if result.returncode == 0:
-            tensorflow_available = True
-            print("✓ TensorFlow is available. USE model can be used.")
-        else:
-            print("✗ TensorFlow import failed. USE will be skipped.")
-            print(f"  Error: {result.stderr[:200]}")
-    except subprocess.TimeoutExpired:
-        print("✗ TensorFlow import timed out. USE will be skipped.")
-    except Exception as e:
-        print(f"✗ Could not test TensorFlow: {e}. USE will be skipped.")
+    if RUN_USE:
+        print("\nChecking TensorFlow availability for USE model...")
+        try:
+            # Test TensorFlow import in a subprocess to avoid crashing the main process
+            result = subprocess.run(
+                [sys.executable, '-c', 'import tensorflow as tf; import tensorflow_hub as hub; print(\"OK\")'],
+                capture_output=True,
+                timeout=300,
+                text=True
+            )
+            if result.returncode == 0:
+                tensorflow_available = True
+                print("✓ TensorFlow is available. USE model can be used.")
+            else:
+                print("✗ TensorFlow import failed. USE will be skipped.")
+                print(f"  Error: {result.stderr[:200]}")
+        except subprocess.TimeoutExpired:
+            print("✗ TensorFlow import timed out. USE will be skipped.")
+        except Exception as e:
+            print(f"✗ Could not test TensorFlow: {e}. USE will be skipped.")
     
     # Initialize models
-    bert_classifier = BERTClassifier()  # Uses config: BERT_MODEL_NAME and BERT_BATCH_SIZE
-    liwc_classifier = LIWCClassifier()
-    
+    bert_classifier = None
+    bert_results = None
+    # if RUN_DISTILBERT:
+    #     bert_classifier = BERTClassifier()  # Uses config: BERT_MODEL_NAME and BERT_BATCH_SIZE
+
     # Try to initialize USE only if TensorFlow is available
     use_classifier = None
     use_results = None
     
-    if tensorflow_available:
+    if RUN_USE and tensorflow_available:
         print("\nAttempting to initialize USE model...")
         try:
             use_classifier = USEClassifier()
@@ -579,18 +526,18 @@ def main():
             print("USE model loaded successfully!\n")
         except Exception as e:
             print(f"\n⚠️  Warning: Could not initialize USE model: {e}")
-            print("Skipping USE evaluation. Continuing with BERT and LIWC only.\n")
+            print("Skipping USE evaluation.\n")
             use_classifier = None
-    else:
+    elif RUN_USE:
         print("\n⚠️  Skipping USE evaluation (TensorFlow not available).")
-        print("Continuing with BERT and LIWC only.\n")
+        print("USE will be skipped.\n")
     
     # Load models
-    bert_classifier.load_model()
-    # LIWC doesn't need model loading - uses features directly
-    
+    # if RUN_DISTILBERT and bert_classifier is not None:
+    #     bert_classifier.load_model()
+
     # Evaluate USE (if available)
-    if use_classifier is not None:
+    if RUN_USE and use_classifier is not None:
         print("\n" + "="*80)
         print("STARTING USE EVALUATION")
         print("="*80)
@@ -598,26 +545,21 @@ def main():
             use_results = use_classifier.evaluate_cv(X, y, n_splits=5)
         except Exception as e:
             print(f"Error during USE evaluation: {e}")
-            print("Skipping USE results. Continuing with BERT and LIWC.\n")
+            print("Skipping USE results.\n")
             use_results = None
     
-    # Evaluate BERT/DistilBERT
-    print("\n" + "="*80)
-    print(f"STARTING {BERT_MODEL_LABEL} EVALUATION")
-    print("="*80)
-    bert_results = bert_classifier.evaluate_cv(X, y, n_splits=5)
-    
-    # Evaluate LIWC
-    print("\n" + "="*80)
-    print("STARTING LIWC FEATURES EVALUATION")
-    print("="*80)
-    liwc_results = liwc_classifier.evaluate_cv(X_liwc, y_liwc, n_splits=5)
-    
+    # Evaluate BERT/DistilBERT (commented out - USE only)
+    # if RUN_DISTILBERT and bert_classifier is not None:
+    #     print("\n" + "="*80)
+    #     print(f"STARTING {BERT_MODEL_LABEL} EVALUATION")
+    #     print("="*80)
+    #     bert_results = bert_classifier.evaluate_cv(X, y, n_splits=5)
+
     # Print summary
-    print_results_summary(use_results, bert_results, liwc_results)
+    print_results_summary(use_results, bert_results)
     
     # Save results
-    save_results_to_csv(use_results, bert_results, liwc_results)
+    save_results_to_csv(use_results, bert_results)
     
     print("Evaluation complete!")
 
