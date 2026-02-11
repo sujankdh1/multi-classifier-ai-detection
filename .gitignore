@@ -23,6 +23,7 @@ shap_results/
 
 # Data files (large datasets)
 *.csv
+*.zip
 !requirements.txt
 
 # IDE
