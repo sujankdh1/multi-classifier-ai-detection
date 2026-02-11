@@ -77,15 +77,19 @@ pip install -r requirements.txt
 
 ## 📊 Data Requirements
 
-The code expects the following data files:
+⚠️ **Note:** Data files are not included in this repository due to size constraints. You must provide your own datasets.
+
+The code expects the following data files in the project root:
 
 1. **For LIWC classifiers**: `LIWC-22 Results - combined_training_dataset - LIWC Analysis.csv`
    - Must contain LIWC-22 linguistic features
    - Required columns: `is_ai_flagged` (target variable)
    - Metadata columns: `pageid`, `title`, `content`, `categories`, `Segment`, `WC`
+   - Generate using [LIWC-22 software](https://www.liwc.app/)
 
 2. **For TF-IDF and embedding-based classifiers**: `combined_training_dataset.csv`
    - Must contain: `content` (text data) and `is_ai_flagged` (labels)
+   - Format: CSV with at least two columns - text content and binary labels
 
 ## 💻 Usage
 
