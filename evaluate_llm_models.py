@@ -1,288 +1,50 @@
 """
-LLM Text Classification Pipeline
-Evaluates Universal Sentence Encoder (USE) and BERT models on binary classification task
-using 5-fold cross-validation.
+LIWC Features Classification Pipeline with SHAP Analysis
+Evaluates LIWC features using Random Forest with cross-validation and SHAP interpretability.
 """
 
 import pandas as pd
 import numpy as np
 import time
-from tqdm import tqdm
 import warnings
-import subprocess
-import sys
-warnings.filterwarnings('ignore')
-
-# NLTK for sentence tokenization
-import nltk
-nltk.download('punkt', quiet=True)
-from nltk.tokenize import sent_tokenize
+import os
 
 # Scikit-learn imports
 from sklearn.model_selection import StratifiedKFold
 from sklearn.ensemble import RandomForestClassifier
-from sklearn.metrics import accuracy_score
 from sklearn.preprocessing import StandardScaler
-from sklearn.feature_extraction.text import TfidfVectorizer
-
-# TensorFlow and USE imports - MOVED TO LAZY IMPORT
-# TensorFlow will only be imported when USE model is actually loaded
-# This avoids random_device errors on systems where TensorFlow has issues
-import os
-# Set environment variables early (before any TensorFlow import attempt)
-os.environ['TF_CPP_MIN_LOG_LEVEL'] = '2'
-os.environ['TF_DETERMINISTIC_OPS'] = '1'
-os.environ['TF_FORCE_GPU_ALLOW_GROWTH'] = 'true'
-os.environ['TF_USE_LEGACY_KERAS'] = '1'
-
-# Transformers and PyTorch imports
-from transformers import AutoTokenizer, AutoModel
-import torch
+from sklearn.metrics import accuracy_score, f1_score
 
 # SHAP for model interpretability
 import shap
 import matplotlib.pyplot as plt
 
-# Set random seeds for reproducibility
+warnings.filterwarnings('ignore')
 np.random.seed(42)
-# tf.random.set_seed(42)
-torch.manual_seed(42)
-
-# Model Configuration
-USE_DISTILBERT = True  # Set to False for BERT, True for DistilBERT
-
-if USE_DISTILBERT:
-    BERT_MODEL_NAME = "distilbert-base-uncased"
-    BERT_BATCH_SIZE = 32
-    BERT_MODEL_LABEL = "DistilBERT"
-else:
-    BERT_MODEL_NAME = "bert-base-uncased"
-    BERT_BATCH_SIZE = 16
-    BERT_MODEL_LABEL = "BERT"
-
-
-class USEClassifier:
-    """Universal Sentence Encoder classifier with 5-fold cross-validation."""
-    
-    def __init__(self):
-        self.model_url = "https://tfhub.dev/google/universal-sentence-encoder/4"
-        self.embedding_model = None
-        self.classifier = RandomForestClassifier(n_estimators=100, random_state=42, n_jobs=-1)
-        self.scaler = StandardScaler()
-        
-    def load_model(self):
-        """Load USE model from TensorFlow Hub."""
-        # Lazy import TensorFlow - only import when actually needed
-        # This avoids random_device errors on systems where TensorFlow has issues
-        try:
-            import tensorflow as tf
-            import tensorflow_hub as hub
-        except Exception as e:
-            raise ImportError(f"TensorFlow is not available. Cannot load USE model. Error: {e}")
-        
-        print("Loading Universal Sentence Encoder model...")
-        
-        # Set TensorFlow to use single thread to avoid mutex issues
-        try:
-            tf.config.threading.set_inter_op_parallelism_threads(1)
-            tf.config.threading.set_intra_op_parallelism_threads(1)
-        except:
-            pass  # Ignore if already configured
-        
-        # Set random seed (use numpy-based approach if tf.random fails)
-        try:
-            tf.random.set_seed(42)
-        except Exception as e:
-            # Fallback: use numpy seed if TensorFlow random fails
-            print(f"Warning: Could not set TensorFlow random seed: {e}")
-            print("Using numpy random seed instead.")
-            np.random.seed(42)
-        
-        try:
-            print("Downloading/loading model from TensorFlow Hub (this may take a few minutes)...")
-            self.embedding_model = hub.load(self.model_url)
-            print("USE model loaded successfully.")
-        except Exception as e:
-            print(f"Error loading USE model: {e}")
-            raise
-        
-    def get_embeddings(self, texts, batch_size=32):
-        """Extract embeddings for texts in batches."""
-        embeddings = []
-        for i in tqdm(range(0, len(texts), batch_size), desc="Extracting USE embeddings"):
-            batch = texts[i:i+batch_size]
-            batch_embeddings = self.embedding_model(batch).numpy()
-            embeddings.append(batch_embeddings)
-        return np.vstack(embeddings)
-    
-    def evaluate_cv(self, X, y, n_splits=5):
-        """Perform 5-fold cross-validation."""
-        # Convert to numpy array if it's a list
-        if isinstance(X, list):
-            X = np.array(X, dtype=object)
-        if isinstance(y, list):
-            y = np.array(y)
-        
-        skf = StratifiedKFold(n_splits=n_splits, shuffle=True, random_state=42)
-        fold_accuracies = []
-        fold_times = []
-        
-        print(f"\n{'='*60}")
-        print("Universal Sentence Encoder - 5-Fold Cross-Validation")
-        print(f"{'='*60}")
-        
-        for fold, (train_idx, val_idx) in enumerate(skf.split(X, y), 1):
-            print(f"\nFold {fold}/{n_splits}")
-            
-            # Split data
-            X_train, X_val = X[train_idx], X[val_idx]
-            y_train, y_val = y[train_idx], y[val_idx]
-            
-            # Extract embeddings
-            start_time = time.time()
-            X_train_emb = self.get_embeddings(X_train.tolist())
-            X_val_emb = self.get_embeddings(X_val.tolist())
-            
-            # Scale features
-            X_train_emb_scaled = self.scaler.fit_transform(X_train_emb)
-            X_val_emb_scaled = self.scaler.transform(X_val_emb)
-            
-            # Train classifier
-            self.classifier.fit(X_train_emb_scaled, y_train)
-            
-            # Predict and evaluate
-            y_pred = self.classifier.predict(X_val_emb_scaled)
-            accuracy = accuracy_score(y_val, y_pred)
-            
-            fold_time = time.time() - start_time
-            fold_accuracies.append(accuracy)
-            fold_times.append(fold_time)
-            
-            print(f"  Accuracy: {accuracy:.4f} | Time: {fold_time:.2f}s")
-        
-        return fold_accuracies, fold_times
-
-
-class BERTClassifier:
-    """BERT classifier with 5-fold cross-validation."""
-    
-    def __init__(self, model_name=None, max_length=512, batch_size=None):
-        # Use default from config if not specified
-        if model_name is None:
-            model_name = BERT_MODEL_NAME
-        if batch_size is None:
-            batch_size = BERT_BATCH_SIZE
-        self.model_name = model_name
-        self.max_length = max_length
-        self.batch_size = batch_size
-        self.tokenizer = None
-        self.model = None
-        self.device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
-        self.classifier = RandomForestClassifier(n_estimators=100, random_state=42, n_jobs=-1)
-        self.scaler = StandardScaler()
-        
-    def load_model(self):
-        """Load BERT/DistilBERT model and tokenizer."""
-        print(f"Loading {BERT_MODEL_LABEL} model and tokenizer...")
-        self.tokenizer = AutoTokenizer.from_pretrained(self.model_name)
-        self.model = AutoModel.from_pretrained(self.model_name)
-        self.model.to(self.device)
-        self.model.eval()
-        print(f"{BERT_MODEL_LABEL} model loaded successfully on {self.device}.")
-        
-    def get_embeddings(self, texts):
-        """Extract BERT/DistilBERT embeddings using [CLS] token."""
-        embeddings = []
-        
-        with torch.no_grad():
-            for i in tqdm(range(0, len(texts), self.batch_size), desc=f"Extracting {BERT_MODEL_LABEL} embeddings"):
-                batch_texts = texts[i:i+self.batch_size]
-                
-                # Tokenize
-                encoded = self.tokenizer(
-                    batch_texts,
-                    padding=True,
-                    truncation=True,
-                    max_length=self.max_length,
-                    return_tensors='pt'
-                )
-                
-                # Move to device
-                encoded = {k: v.to(self.device) for k, v in encoded.items()}
-                
-                # Get model output
-                outputs = self.model(**encoded)
-                
-                # Use [CLS] token embedding (first token)
-                cls_embeddings = outputs.last_hidden_state[:, 0, :].cpu().numpy()
-                embeddings.append(cls_embeddings)
-        
-        return np.vstack(embeddings)
-    
-    def evaluate_cv(self, X, y, n_splits=5):
-        """Perform 5-fold cross-validation."""
-        # Convert to numpy array if it's a list
-        if isinstance(X, list):
-            X = np.array(X, dtype=object)
-        if isinstance(y, list):
-            y = np.array(y)
-        
-        skf = StratifiedKFold(n_splits=n_splits, shuffle=True, random_state=42)
-        fold_accuracies = []
-        fold_times = []
-        
-        print(f"\n{'='*60}")
-        print(f"{BERT_MODEL_LABEL} - 5-Fold Cross-Validation")
-        print(f"{'='*60}")
-        
-        for fold, (train_idx, val_idx) in enumerate(skf.split(X, y), 1):
-            print(f"\nFold {fold}/{n_splits}")
-            
-            # Split data
-            X_train, X_val = X[train_idx], X[val_idx]
-            y_train, y_val = y[train_idx], y[val_idx]
-            
-            # Extract embeddings
-            start_time = time.time()
-            X_train_emb = self.get_embeddings(X_train.tolist())
-            X_val_emb = self.get_embeddings(X_val.tolist())
-            
-            # Scale features
-            X_train_emb_scaled = self.scaler.fit_transform(X_train_emb)
-            X_val_emb_scaled = self.scaler.transform(X_val_emb)
-            
-            # Train classifier
-            self.classifier.fit(X_train_emb_scaled, y_train)
-            
-            # Predict and evaluate
-            y_pred = self.classifier.predict(X_val_emb_scaled)
-            accuracy = accuracy_score(y_val, y_pred)
-            
-            fold_time = time.time() - start_time
-            fold_accuracies.append(accuracy)
-            fold_times.append(fold_time)
-            
-            print(f"  Accuracy: {accuracy:.4f} | Time: {fold_time:.2f}s")
-        
-        return fold_accuracies, fold_times
 
 
 class LIWCClassifier:
-    """LIWC features classifier with 5-fold cross-validation."""
+    """LIWC features classifier with 5-fold cross-validation and SHAP support."""
     
     def __init__(self):
         self.classifier = RandomForestClassifier(n_estimators=100, random_state=42, n_jobs=-1)
         self.scaler = StandardScaler()
+        self.final_model = None  # Store final trained model for SHAP
+        self.final_scaler = None  # Store final scaler for SHAP
+        self.feature_names = None  # Store feature names for SHAP
         
     def evaluate_cv(self, X, y, n_splits=5):
         """Perform 5-fold cross-validation on LIWC features."""
         skf = StratifiedKFold(n_splits=n_splits, shuffle=True, random_state=42)
         fold_accuracies = []
+        fold_f1_scores = []
         fold_times = []
         
         print(f"\n{'='*60}")
         print("LIWC Features - 5-Fold Cross-Validation")
         print(f"{'='*60}")
+        print(f"Number of LIWC features: {X.shape[1]}")
+        print(f"Number of samples: {X.shape[0]}")
         
         for fold, (train_idx, val_idx) in enumerate(skf.split(X, y), 1):
             print(f"\nFold {fold}/{n_splits}")
@@ -291,139 +53,56 @@ class LIWCClassifier:
             X_train, X_val = X[train_idx], X[val_idx]
             y_train, y_val = y[train_idx], y[val_idx]
             
-            # Scale features
             start_time = time.time()
-            X_train_scaled = self.scaler.fit_transform(X_train)
-            X_val_scaled = self.scaler.transform(X_val)
+            
+            # Scale features
+            print("  Scaling features...", flush=True)
+            scaler = StandardScaler()
+            X_train_scaled = scaler.fit_transform(X_train)
+            X_val_scaled = scaler.transform(X_val)
             
             # Train classifier
-            self.classifier.fit(X_train_scaled, y_train)
+            print("  Training Random Forest...", flush=True)
+            model = RandomForestClassifier(n_estimators=100, random_state=42, n_jobs=-1)
+            model.fit(X_train_scaled, y_train)
             
             # Predict and evaluate
-            y_pred = self.classifier.predict(X_val_scaled)
+            print("  Making predictions...", flush=True)
+            y_pred = model.predict(X_val_scaled)
             accuracy = accuracy_score(y_val, y_pred)
+            f1 = f1_score(y_val, y_pred, average='binary')
             
             fold_time = time.time() - start_time
             fold_accuracies.append(accuracy)
+            fold_f1_scores.append(f1)
             fold_times.append(fold_time)
             
-            print(f"  Accuracy: {accuracy:.4f} | Time: {fold_time:.2f}s")
+            print(f"  Accuracy: {accuracy:.4f} | F1 Score: {f1:.4f} | Time: {fold_time:.2f}s")
         
-        return fold_accuracies, fold_times
-
-
-class TFIDFClassifier:
-    """TF-IDF features classifier with 5-fold cross-validation."""
+        return fold_accuracies, fold_f1_scores, fold_times
     
-    def __init__(self, max_features=5000, ngram_range=(1, 2)):
-        """
-        Initialize TF-IDF classifier.
-        
-        Args:
-            max_features: Maximum number of features to extract (default: 5000)
-            ngram_range: Range of n-grams to use (default: (1, 2) for unigrams and bigrams)
-        """
-        self.max_features = max_features
-        self.ngram_range = ngram_range
-        self.vectorizer = TfidfVectorizer(
-            max_features=max_features,
-            ngram_range=ngram_range,
-            stop_words='english',
-            lowercase=True,
-            min_df=2,  # Ignore terms that appear in fewer than 2 documents
-            max_df=0.95  # Ignore terms that appear in more than 95% of documents
-        )
-        self.classifier = RandomForestClassifier(n_estimators=100, random_state=42, n_jobs=-1)
-        self.scaler = StandardScaler()
-        self.final_model = None  # Store final trained model for SHAP
-        self.final_vectorizer = None  # Store final vectorizer for SHAP
-        self.final_scaler = None  # Store final scaler for SHAP
-        self.feature_names = None  # Store feature names for SHAP
-        
-    def evaluate_cv(self, X, y, n_splits=5):
-        """Perform 5-fold cross-validation on TF-IDF features."""
-        # Convert to numpy array if it's a list
-        if isinstance(X, list):
-            X = np.array(X, dtype=object)
-        if isinstance(y, list):
-            y = np.array(y)
-        
-        skf = StratifiedKFold(n_splits=n_splits, shuffle=True, random_state=42)
-        fold_accuracies = []
-        fold_times = []
-        
-        print(f"\n{'='*60}")
-        print("TF-IDF Features - 5-Fold Cross-Validation")
-        print(f"{'='*60}")
-        print(f"Max Features: {self.max_features}, N-gram Range: {self.ngram_range}")
-        
-        for fold, (train_idx, val_idx) in enumerate(skf.split(X, y), 1):
-            print(f"\nFold {fold}/{n_splits}")
-            
-            # Split data
-            X_train, X_val = X[train_idx], X[val_idx]
-            y_train, y_val = y[train_idx], y[val_idx]
-            
-            # Extract TF-IDF features
-            start_time = time.time()
-            X_train_tfidf = self.vectorizer.fit_transform(X_train.tolist())
-            X_val_tfidf = self.vectorizer.transform(X_val.tolist())
-            
-            # Convert sparse matrix to dense array for scaling
-            X_train_tfidf = X_train_tfidf.toarray()
-            X_val_tfidf = X_val_tfidf.toarray()
-            
-            # Scale features
-            X_train_scaled = self.scaler.fit_transform(X_train_tfidf)
-            X_val_scaled = self.scaler.transform(X_val_tfidf)
-            
-            # Train classifier
-            self.classifier.fit(X_train_scaled, y_train)
-            
-            # Predict and evaluate
-            y_pred = self.classifier.predict(X_val_scaled)
-            accuracy = accuracy_score(y_val, y_pred)
-            
-            fold_time = time.time() - start_time
-            fold_accuracies.append(accuracy)
-            fold_times.append(fold_time)
-            
-            print(f"  Accuracy: {accuracy:.4f} | Time: {fold_time:.2f}s")
-        
-        return fold_accuracies, fold_times
-    
-    def train_final_model(self, X, y):
+    def train_final_model(self, X, y, feature_names=None):
         """
         Train a final model on all data for SHAP analysis.
         
         Args:
-            X: List or array of text data
+            X: Array of LIWC features
             y: Array of labels
+            feature_names: List of feature names
         
         Returns:
-            Tuple of (X_processed, y) where X_processed is the transformed feature matrix
+            Tuple of (X_scaled, y) where X_scaled is the transformed feature matrix
         """
         print("\n" + "="*60)
         print("Training Final Model for SHAP Analysis")
         print("="*60)
         
-        # Convert to numpy array if it's a list
-        if isinstance(X, list):
-            X = np.array(X, dtype=object)
-        if isinstance(y, list):
-            y = np.array(y)
-        
-        # Extract TF-IDF features
-        print("Extracting TF-IDF features...")
-        X_tfidf = self.vectorizer.fit_transform(X.tolist())
-        X_tfidf = X_tfidf.toarray()
-        
         # Store feature names
-        self.feature_names = self.vectorizer.get_feature_names_out()
+        self.feature_names = feature_names if feature_names is not None else np.array([f"feature_{i}" for i in range(X.shape[1])])
         
         # Scale features
         print("Scaling features...")
-        X_scaled = self.scaler.fit_transform(X_tfidf)
+        X_scaled = self.scaler.fit_transform(X)
         
         # Train classifier
         print("Training RandomForest classifier...")
@@ -431,81 +110,11 @@ class TFIDFClassifier:
         
         # Store final components for SHAP
         self.final_model = self.classifier
-        self.final_vectorizer = self.vectorizer
         self.final_scaler = self.scaler
         
         print(f"Final model trained on {len(X)} samples with {X_scaled.shape[1]} features.")
         
         return X_scaled, y
-
-
-def get_first_sentence(text):
-    """Extract first sentence from text using NLTK tokenizer."""
-    if not text or pd.isna(text):
-        return ""
-    
-    text = str(text).strip()
-    if not text:
-        return ""
-    
-    # Skip empty lines and very short lines
-    lines = text.split('\n')
-    for line in lines:
-        line = line.strip()
-        if line and len(line) > 10:  # Skip very short lines
-            sentences = sent_tokenize(line)
-            if sentences:
-                return sentences[0]
-    
-    # Fallback: return first 200 characters if no sentence found
-    return text[:200].strip()
-
-
-def load_and_preprocess_data(filepath):
-    """Load and preprocess the dataset."""
-    print(f"Loading dataset from {filepath}...")
-    df = pd.read_csv(filepath)
-    
-    print(f"Dataset shape: {df.shape}")
-    print(f"Columns: {df.columns.tolist()}")
-    
-    # Check for missing values in content column
-    missing_content = df['content'].isna().sum()
-    print(f"Missing values in 'content': {missing_content}")
-    
-    # Handle missing values
-    df = df.dropna(subset=['content'])
-    
-    # Check target variable
-    print(f"\nTarget variable 'is_ai_flagged' distribution:")
-    print(df['is_ai_flagged'].value_counts())
-    print(f"Class balance: {df['is_ai_flagged'].value_counts(normalize=True)}")
-    
-    # Prepare data
-    X = df['content'].values
-    y = df['is_ai_flagged'].values
-    
-    # Convert text to string if needed
-    X = [str(text) for text in X]
-    
-    # Extract first sentence from each text
-    print("\nExtracting first sentence from each text...")
-    X = [get_first_sentence(text) for text in tqdm(X, desc="Processing texts")]
-    
-    # Filter out empty texts
-    valid_indices = [i for i, text in enumerate(X) if text.strip()]
-    X = [X[i] for i in valid_indices]
-    y = [y[i] for i in valid_indices]
-    
-    # Use full dataset (no sample limit)
-    # print(f"\nLimiting to 10 samples for testing...")
-    # X = X[:10]
-    # y = y[:10]
-    
-    print(f"\nFinal dataset size: {len(X)} samples")
-    print(f"Sample first sentence (first 100 chars): {X[0][:100]}..." if X else "No samples")
-    
-    return X, y
 
 
 def load_liwc_data(filepath):
@@ -516,7 +125,7 @@ def load_liwc_data(filepath):
     print(f"LIWC dataset shape: {df.shape}")
     
     # Metadata columns to exclude
-    metadata_cols = ['pageid', 'title', 'content', 'categories', 'is_ai_flagged', 'Segment']
+    metadata_cols = ['pageid', 'title', 'content', 'categories', 'is_ai_flagged', 'Segment', 'WC']
     
     # Get LIWC feature columns (all columns except metadata)
     liwc_feature_cols = [col for col in df.columns if col not in metadata_cols]
@@ -538,142 +147,50 @@ def load_liwc_data(filepath):
     X = df[liwc_feature_cols].values.astype(np.float32)
     y = df['is_ai_flagged'].values
     
-    # Use full dataset (no sample limit)
-    # print(f"\nLimiting to 10 samples for testing...")
-    # X = X[:10]
-    # y = y[:10]
-    
     print(f"\nFinal LIWC dataset size: {len(X)} samples")
     print(f"Number of features: {X.shape[1]}")
     
-    return X, y
+    return X, y, liwc_feature_cols
 
 
-def print_results_summary(use_results=None, bert_results=None, liwc_results=None, tfidf_results=None):
-    """Print formatted results summary."""
+def print_liwc_results_summary(liwc_results):
+    """Print formatted results summary for LIWC features."""
     print(f"\n{'='*80}")
-    print("EVALUATION RESULTS SUMMARY")
+    print("LIWC FEATURES EVALUATION RESULTS SUMMARY")
     print(f"{'='*80}\n")
     
-    # USE Results
-    # if use_results is not None:
-    #     use_accs, use_times = use_results
-    #     print("Universal Sentence Encoder (USE):")
-    #     print(f"  Mean Accuracy: {np.mean(use_accs):.4f} ± {np.std(use_accs):.4f}")
-    #     print(f"  Per-fold Accuracies: {[f'{acc:.4f}' for acc in use_accs]}")
-    #     print(f"  Mean Time per Fold: {np.mean(use_times):.2f}s ± {np.std(use_times):.2f}s")
-    #     print(f"  Total Time: {np.sum(use_times):.2f}s")
-    #     print("\n" + "-"*80 + "\n")
-    
-    # BERT/DistilBERT Results
-    # if bert_results is not None:
-    #     bert_accs, bert_times = bert_results
-    #     print(f"{BERT_MODEL_LABEL} ({BERT_MODEL_NAME}):")
-    #     print(f"  Mean Accuracy: {np.mean(bert_accs):.4f} ± {np.std(bert_accs):.4f}")
-    #     print(f"  Per-fold Accuracies: {[f'{acc:.4f}' for acc in bert_accs]}")
-    #     print(f"  Mean Time per Fold: {np.mean(bert_times):.2f}s ± {np.std(bert_times):.2f}s")
-    #     print(f"  Total Time: {np.sum(bert_times):.2f}s")
-    #     print("\n" + "-"*80 + "\n")
-    
-    # LIWC Results
-    # if liwc_results is not None:
-    #     liwc_accs, liwc_times = liwc_results
-    #     print("LIWC Features:")
-    #     print(f"  Mean Accuracy: {np.mean(liwc_accs):.4f} ± {np.std(liwc_accs):.4f}")
-    #     print(f"  Per-fold Accuracies: {[f'{acc:.4f}' for acc in liwc_accs]}")
-    #     print(f"  Mean Time per Fold: {np.mean(liwc_times):.2f}s ± {np.std(liwc_times):.2f}s")
-    #     print(f"  Total Time: {np.sum(liwc_times):.2f}s")
-    
-    # TF-IDF Results
-    if tfidf_results is not None:
-        tfidf_accs, tfidf_times = tfidf_results
-        print("TF-IDF Features:")
-        print(f"  Mean Accuracy: {np.mean(tfidf_accs):.4f} ± {np.std(tfidf_accs):.4f}")
-        print(f"  Per-fold Accuracies: {[f'{acc:.4f}' for acc in tfidf_accs]}")
-        print(f"  Mean Time per Fold: {np.mean(tfidf_times):.2f}s ± {np.std(tfidf_times):.2f}s")
-        print(f"  Total Time: {np.sum(tfidf_times):.2f}s")
-    
-    print("\n" + "-"*80 + "\n")
-    
-    # Comparison (commented out for TF-IDF only branch)
-    # print("Comparison:")
-    # if use_results is not None and bert_results is not None:
-    #     use_accs, use_times = use_results
-    #     bert_accs, bert_times = bert_results
-    #     print(f"  USE vs {BERT_MODEL_LABEL} Accuracy Difference: {np.mean(bert_accs) - np.mean(use_accs):.4f}")
-    #     print(f"  Speed Ratio (USE/{BERT_MODEL_LABEL}): {np.mean(use_times) / np.mean(bert_times):.2f}x")
-    # 
-    # if liwc_results is not None:
-    #     liwc_accs, liwc_times = liwc_results
-    #     if use_results is not None:
-    #         use_accs, use_times = use_results
-    #         print(f"  LIWC vs USE Accuracy Difference: {np.mean(liwc_accs) - np.mean(use_accs):.4f}")
-    #         print(f"  Speed Ratio (LIWC/USE): {np.mean(liwc_times) / np.mean(use_times):.2f}x")
-    #     if bert_results is not None:
-    #         bert_accs, bert_times = bert_results
-    #         print(f"  LIWC vs {BERT_MODEL_LABEL} Accuracy Difference: {np.mean(liwc_accs) - np.mean(bert_accs):.4f}")
-    #         print(f"  Speed Ratio (LIWC/{BERT_MODEL_LABEL}): {np.mean(liwc_times) / np.mean(bert_times):.2f}x")
+    liwc_accs, liwc_f1s, liwc_times = liwc_results
+    print("LIWC Features with Random Forest:")
+    print(f"  Mean Accuracy: {np.mean(liwc_accs):.4f} ± {np.std(liwc_accs):.4f}")
+    print(f"  Per-fold Accuracies: {[f'{acc:.4f}' for acc in liwc_accs]}")
+    print(f"  Mean F1 Score: {np.mean(liwc_f1s):.4f} ± {np.std(liwc_f1s):.4f}")
+    print(f"  Per-fold F1 Scores: {[f'{f1:.4f}' for f1 in liwc_f1s]}")
+    print(f"  Mean Time per Fold: {np.mean(liwc_times):.2f}s ± {np.std(liwc_times):.2f}s")
+    print(f"  Total Time: {np.sum(liwc_times):.2f}s")
     
     print(f"\n{'='*80}\n")
 
 
-def save_results_to_csv(use_results=None, bert_results=None, liwc_results=None, tfidf_results=None, output_file="evaluation_results.csv"):
-    """Save results to CSV file."""
-    # Create base DataFrame
+def save_liwc_results_to_csv(liwc_results, output_file="liwc_evaluation_results.csv"):
+    """Save LIWC evaluation results to CSV file."""
+    liwc_accs, liwc_f1s, liwc_times = liwc_results
+    
     results_dict = {
-        'Fold': range(1, 6)
+        'Fold': list(range(1, 6)),
+        'LIWC_Accuracy': liwc_accs,
+        'LIWC_F1_Score': liwc_f1s,
+        'LIWC_Time': liwc_times
     }
-    
-    # Add USE results if available
-    # if use_results is not None:
-    #     use_accs, use_times = use_results
-    #     results_dict['USE_Accuracy'] = use_accs
-    #     results_dict['USE_Time'] = use_times
-    
-    # Add BERT results if available
-    # if bert_results is not None:
-    #     bert_accs, bert_times = bert_results
-    #     results_dict['BERT_Accuracy'] = bert_accs
-    #     results_dict['BERT_Time'] = bert_times
-    
-    # Add LIWC results if available
-    # if liwc_results is not None:
-    #     liwc_accs, liwc_times = liwc_results
-    #     results_dict['LIWC_Accuracy'] = liwc_accs
-    #     results_dict['LIWC_Time'] = liwc_times
-    
-    # Add TF-IDF results if available
-    if tfidf_results is not None:
-        tfidf_accs, tfidf_times = tfidf_results
-        results_dict['TFIDF_Accuracy'] = tfidf_accs
-        results_dict['TFIDF_Time'] = tfidf_times
     
     results_df = pd.DataFrame(results_dict)
     
     # Add summary row
     summary_dict = {
-        'Fold': ['Mean', 'Std']
+        'Fold': ['Mean', 'Std'],
+        'LIWC_Accuracy': [np.mean(liwc_accs), np.std(liwc_accs)],
+        'LIWC_F1_Score': [np.mean(liwc_f1s), np.std(liwc_f1s)],
+        'LIWC_Time': [np.mean(liwc_times), np.std(liwc_times)]
     }
-    
-    # if use_results is not None:
-    #     use_accs, use_times = use_results
-    #     summary_dict['USE_Accuracy'] = [np.mean(use_accs), np.std(use_accs)]
-    #     summary_dict['USE_Time'] = [np.mean(use_times), np.std(use_times)]
-    # 
-    # if bert_results is not None:
-    #     bert_accs, bert_times = bert_results
-    #     summary_dict['BERT_Accuracy'] = [np.mean(bert_accs), np.std(bert_accs)]
-    #     summary_dict['BERT_Time'] = [np.mean(bert_times), np.std(bert_times)]
-    # 
-    # if liwc_results is not None:
-    #     liwc_accs, liwc_times = liwc_results
-    #     summary_dict['LIWC_Accuracy'] = [np.mean(liwc_accs), np.std(liwc_accs)]
-    #     summary_dict['LIWC_Time'] = [np.mean(liwc_times), np.std(liwc_times)]
-    
-    if tfidf_results is not None:
-        tfidf_accs, tfidf_times = tfidf_results
-        summary_dict['TFIDF_Accuracy'] = [np.mean(tfidf_accs), np.std(tfidf_accs)]
-        summary_dict['TFIDF_Time'] = [np.mean(tfidf_times), np.std(tfidf_times)]
     
     summary_row = pd.DataFrame(summary_dict)
     results_df = pd.concat([results_df, summary_row], ignore_index=True)
@@ -681,7 +198,7 @@ def save_results_to_csv(use_results=None, bert_results=None, liwc_results=None, 
     print(f"Results saved to {output_file}")
 
 
-def generate_shap_explanations(classifier, X_sample, y_sample=None, max_samples=10, output_dir="shap_results"):
+def generate_shap_explanations(classifier, X_sample, y_sample=None, max_samples=1000, output_dir="shap_results"):
     """
     Generate SHAP explanations for a trained classifier.
     
@@ -696,8 +213,6 @@ def generate_shap_explanations(classifier, X_sample, y_sample=None, max_samples=
         shap_values: SHAP values array
         shap_explainer: SHAP explainer object
     """
-    import os
-    
     # Create output directory
     os.makedirs(output_dir, exist_ok=True)
     
@@ -715,7 +230,7 @@ def generate_shap_explanations(classifier, X_sample, y_sample=None, max_samples=
         # Use stratified sampling if labels are available
         if y_sample is not None:
             from sklearn.model_selection import train_test_split
-            X_sample, _, y_sample, _ = train_test_split(  # Fixed: take train set (first), not test set
+            X_sample, _, y_sample, _ = train_test_split(
                 X_sample, y_sample, 
                 train_size=max_samples, 
                 stratify=y_sample, 
@@ -729,8 +244,6 @@ def generate_shap_explanations(classifier, X_sample, y_sample=None, max_samples=
     
     # Verify we got the right number of samples
     actual_samples = len(X_sample)
-    if actual_samples != max_samples:
-        print(f"Warning: Expected {max_samples} samples but got {actual_samples}")
     print(f"Using {actual_samples} samples for SHAP analysis...")
     
     # Create SHAP explainer (TreeExplainer for RandomForest)
@@ -807,7 +320,7 @@ def generate_shap_explanations(classifier, X_sample, y_sample=None, max_samples=
             plt.barh(range(len(top_features)), top_importance)
             plt.yticks(range(len(top_features)), top_features)
             plt.xlabel('Mean |SHAP Value|')
-            plt.title('Top 30 Features by Mean Absolute SHAP Value')
+            plt.title('Top 30 LIWC Features by Mean Absolute SHAP Value')
             plt.gca().invert_yaxis()
             plt.tight_layout()
             plt.savefig(os.path.join(output_dir, "shap_feature_importance.png"), dpi=150, bbox_inches='tight')
@@ -852,101 +365,30 @@ def generate_shap_explanations(classifier, X_sample, y_sample=None, max_samples=
 
 def main():
     """Main evaluation pipeline."""
-    dataset_path = "combined_training_dataset.csv"
-    # liwc_path = "LIWC-22 Results - combined_training_dataset - LIWC Analysis.csv"
+    liwc_path = "LIWC-22 Results - combined_training_dataset - LIWC Analysis.csv"
     
-    # Load and preprocess data (for TF-IDF)
-    X, y = load_and_preprocess_data(dataset_path)
+    # Check if file exists
+    if not os.path.exists(liwc_path):
+        print(f"Error: File not found: {liwc_path}")
+        return
     
-    # Load LIWC data (commented out for TF-IDF only branch)
-    # X_liwc, y_liwc = load_liwc_data(liwc_path)
+    # Load LIWC data
+    X, y, feature_names = load_liwc_data(liwc_path)
     
-    # Check if TensorFlow can be imported (using subprocess to avoid crashes)
-    # print("\nChecking TensorFlow availability for USE model...")
-    # tensorflow_available = False
-    # try:
-    #     # Test TensorFlow import in a subprocess to avoid crashing the main process
-    #     result = subprocess.run(
-    #         [sys.executable, '-c', 'import tensorflow as tf; import tensorflow_hub as hub; print("OK")'],
-    #         capture_output=True,
-    #         timeout=10,
-    #         text=True
-    #     )
-    #     if result.returncode == 0:
-    #         tensorflow_available = True
-    #         print("✓ TensorFlow is available. USE model can be used.")
-    #     else:
-    #         print("✗ TensorFlow import failed. USE will be skipped.")
-    #         print(f"  Error: {result.stderr[:200]}")
-    # except subprocess.TimeoutExpired:
-    #     print("✗ TensorFlow import timed out. USE will be skipped.")
-    # except Exception as e:
-    #     print(f"✗ Could not test TensorFlow: {e}. USE will be skipped.")
+    # Initialize LIWC classifier
+    liwc_classifier = LIWCClassifier()
     
-    # Initialize models (commented out for TF-IDF only branch)
-    # bert_classifier = BERTClassifier()  # Uses config: BERT_MODEL_NAME and BERT_BATCH_SIZE
-    # liwc_classifier = LIWCClassifier()
-    tfidf_classifier = TFIDFClassifier()  # TF-IDF classifier
-    
-    # Try to initialize USE only if TensorFlow is available (commented out)
-    # use_classifier = None
-    # use_results = None
-    # 
-    # if tensorflow_available:
-    #     print("\nAttempting to initialize USE model...")
-    #     try:
-    #         use_classifier = USEClassifier()
-    #         print("USE classifier created. Loading model...")
-    #         use_classifier.load_model()
-    #         print("USE model loaded successfully!\n")
-    #     except Exception as e:
-    #         print(f"\n⚠️  Warning: Could not initialize USE model: {e}")
-    #         print("Skipping USE evaluation. Continuing with BERT and LIWC only.\n")
-    #         use_classifier = None
-    # else:
-    #     print("\n⚠️  Skipping USE evaluation (TensorFlow not available).")
-    #     print("Continuing with BERT and LIWC only.\n")
-    
-    # Load models (commented out for TF-IDF only branch)
-    # bert_classifier.load_model()
-    # LIWC doesn't need model loading - uses features directly
-    # TF-IDF doesn't need model loading - uses features directly
-    
-    # Evaluate USE (if available) - commented out
-    # if use_classifier is not None:
-    #     print("\n" + "="*80)
-    #     print("STARTING USE EVALUATION")
-    #     print("="*80)
-    #     try:
-    #         use_results = use_classifier.evaluate_cv(X, y, n_splits=5)
-    #     except Exception as e:
-    #         print(f"Error during USE evaluation: {e}")
-    #         print("Skipping USE results. Continuing with BERT and LIWC.\n")
-    #         use_results = None
-    
-    # Evaluate BERT/DistilBERT - commented out
-    # print("\n" + "="*80)
-    # print(f"STARTING {BERT_MODEL_LABEL} EVALUATION")
-    # print("="*80)
-    # bert_results = bert_classifier.evaluate_cv(X, y, n_splits=5)
-    
-    # Evaluate LIWC - commented out
-    # print("\n" + "="*80)
-    # print("STARTING LIWC FEATURES EVALUATION")
-    # print("="*80)
-    # liwc_results = liwc_classifier.evaluate_cv(X_liwc, y_liwc, n_splits=5)
-    
-    # Evaluate TF-IDF
+    # Perform cross-validation evaluation
     print("\n" + "="*80)
-    print("STARTING TF-IDF FEATURES EVALUATION")
+    print("STARTING LIWC FEATURES EVALUATION")
     print("="*80)
-    # tfidf_results = tfidf_classifier.evaluate_cv(X, y, n_splits=5)
+    liwc_results = liwc_classifier.evaluate_cv(X, y, n_splits=5)
     
-    # # Print summary
-    # print_results_summary(tfidf_results=tfidf_results)
+    # Print summary
+    print_liwc_results_summary(liwc_results)
     
-    # # Save results
-    # save_results_to_csv(tfidf_results=tfidf_results)
+    # Save results
+    save_liwc_results_to_csv(liwc_results)
     
     # Generate SHAP explanations
     print("\n" + "="*80)
@@ -954,13 +396,14 @@ def main():
     print("="*80)
     try:
         # Train final model on all data for SHAP
-        X_processed, y_processed = tfidf_classifier.train_final_model(X, y)
+        X_scaled, y_processed = liwc_classifier.train_final_model(X, y, feature_names=feature_names)
         
         # Generate SHAP explanations
         shap_values, shap_explainer = generate_shap_explanations(
-            tfidf_classifier,
-            X_processed,
+            liwc_classifier,
+            X_scaled,
             y_processed, 
+            max_samples=1000,
             output_dir="shap_results"
         )
         
@@ -977,4 +420,3 @@ def main():
 
 if __name__ == "__main__":
     main()
-
