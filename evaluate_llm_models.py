@@ -21,7 +21,7 @@ from nltk.tokenize import sent_tokenize
 # Scikit-learn imports
 from sklearn.model_selection import StratifiedKFold
 from sklearn.svm import LinearSVC
-from sklearn.metrics import accuracy_score
+from sklearn.metrics import accuracy_score, f1_score
 from sklearn.preprocessing import StandardScaler
 from sklearn.feature_extraction.text import TfidfVectorizer
 
@@ -79,6 +79,7 @@ class TFIDFClassifier:
         
         skf = StratifiedKFold(n_splits=n_splits, shuffle=True, random_state=42)
         fold_accuracies = []
+        fold_f1_scores = []
         fold_times = []
         
         print(f"\n{'='*60}")
@@ -112,14 +113,16 @@ class TFIDFClassifier:
             # Predict and evaluate
             y_pred = self.classifier.predict(X_val_scaled)
             accuracy = accuracy_score(y_val, y_pred)
+            f1 = f1_score(y_val, y_pred, average='binary')
             
             fold_time = time.time() - start_time
             fold_accuracies.append(accuracy)
+            fold_f1_scores.append(f1)
             fold_times.append(fold_time)
             
-            print(f"  Accuracy: {accuracy:.4f} | Time: {fold_time:.2f}s")
+            print(f"  Accuracy: {accuracy:.4f} | F1 Score: {f1:.4f} | Time: {fold_time:.2f}s")
         
-        return fold_accuracies, fold_times
+        return fold_accuracies, fold_f1_scores, fold_times
 
 
 def load_and_preprocess_data_full_text(filepath):
@@ -171,10 +174,12 @@ def print_results_summary(tfidf_results=None):
     
     # TF-IDF Results
     if tfidf_results is not None:
-        tfidf_accs, tfidf_times = tfidf_results
+        tfidf_accs, tfidf_f1s, tfidf_times = tfidf_results
         print("TF-IDF Features:")
         print(f"  Mean Accuracy: {np.mean(tfidf_accs):.4f} ± {np.std(tfidf_accs):.4f}")
         print(f"  Per-fold Accuracies: {[f'{acc:.4f}' for acc in tfidf_accs]}")
+        print(f"  Mean F1 Score: {np.mean(tfidf_f1s):.4f} ± {np.std(tfidf_f1s):.4f}")
+        print(f"  Per-fold F1 Scores: {[f'{f1:.4f}' for f1 in tfidf_f1s]}")
         print(f"  Mean Time per Fold: {np.mean(tfidf_times):.2f}s ± {np.std(tfidf_times):.2f}s")
         print(f"  Total Time: {np.sum(tfidf_times):.2f}s")
     
@@ -192,8 +197,9 @@ def save_results_to_csv(tfidf_results=None, output_file="evaluation_results.csv"
     
     # Add TF-IDF results if available
     if tfidf_results is not None:
-        tfidf_accs, tfidf_times = tfidf_results
+        tfidf_accs, tfidf_f1s, tfidf_times = tfidf_results
         results_dict['TFIDF_Accuracy'] = tfidf_accs
+        results_dict['TFIDF_F1_Score'] = tfidf_f1s
         results_dict['TFIDF_Time'] = tfidf_times
     
     results_df = pd.DataFrame(results_dict)
@@ -204,8 +210,9 @@ def save_results_to_csv(tfidf_results=None, output_file="evaluation_results.csv"
     }
     
     if tfidf_results is not None:
-        tfidf_accs, tfidf_times = tfidf_results
+        tfidf_accs, tfidf_f1s, tfidf_times = tfidf_results
         summary_dict['TFIDF_Accuracy'] = [np.mean(tfidf_accs), np.std(tfidf_accs)]
+        summary_dict['TFIDF_F1_Score'] = [np.mean(tfidf_f1s), np.std(tfidf_f1s)]
         summary_dict['TFIDF_Time'] = [np.mean(tfidf_times), np.std(tfidf_times)]
     
     summary_row = pd.DataFrame(summary_dict)
