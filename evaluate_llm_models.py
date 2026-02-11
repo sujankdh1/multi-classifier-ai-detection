@@ -1,20 +1,18 @@
 """
-LIWC Features Classification Pipeline - Unified Multi-View
-Generates Top 20, 30, and 50 plots with a consistent feature order.
+LIWC Features Classification Pipeline with F1 Score Evaluation
 """
 
 import pandas as pd
 import numpy as np
 import warnings
+import time
 import os
-from scipy.stats import pearsonr
 
-# Scikit-learn and SHAP imports
-from sklearn.model_selection import train_test_split
+# Scikit-learn imports
+from sklearn.model_selection import StratifiedKFold
 from sklearn.ensemble import RandomForestClassifier
 from sklearn.preprocessing import StandardScaler
-import shap
-import matplotlib.pyplot as plt
+from sklearn.metrics import accuracy_score, f1_score
 
 warnings.filterwarnings('ignore')
 np.random.seed(42)
@@ -28,53 +26,96 @@ def load_liwc_data(filepath):
     y = df['is_ai_flagged'].values
     return X, y, liwc_feature_cols
 
-def get_unified_ranking(shap_values, X_data, feature_names):
-    """
-    Creates a single master list of features ranked by separation strength.
-    This ensures Top 20 is a subset of Top 30, etc.
-    """
-    rankings = []
-    for i in range(X_data.shape[1]):
-        if np.std(X_data[:, i]) > 0 and np.std(shap_values[:, i]) > 0:
-            # We calculate the 'Cleanness' of the feature
-            corr, _ = pearsonr(X_data[:, i], shap_values[:, i])
-            # We combine Importance (Mean Abs SHAP) with Separation (Correlation)
-            importance = np.abs(shap_values[:, i]).mean()
-            separation_score = abs(corr) * importance 
-            rankings.append((i, separation_score))
-        else:
-            rankings.append((i, 0))
+def evaluate_liwc_cv(X, y, n_splits=5):
+    """Perform 5-fold cross-validation on LIWC features."""
+    skf = StratifiedKFold(n_splits=n_splits, shuffle=True, random_state=42)
+    fold_accuracies = []
+    fold_f1_scores = []
+    fold_times = []
     
-    # Sort by the combined score
-    rankings.sort(key=lambda x: x[1], reverse=True)
-    return [item[0] for item in rankings]
+    print(f"\n{'='*60}")
+    print("LIWC Features - 5-Fold Cross-Validation")
+    print(f"{'='*60}")
+    print(f"Number of LIWC features: {X.shape[1]}")
+    print(f"Number of samples: {X.shape[0]}")
+    
+    for fold, (train_idx, val_idx) in enumerate(skf.split(X, y), 1):
+        print(f"\nFold {fold}/{n_splits}")
+        
+        # Split data
+        X_train, X_val = X[train_idx], X[val_idx]
+        y_train, y_val = y[train_idx], y[val_idx]
+        
+        start_time = time.time()
+        
+        # Scale features
+        print("  Scaling features...", flush=True)
+        scaler = StandardScaler()
+        X_train_scaled = scaler.fit_transform(X_train)
+        X_val_scaled = scaler.transform(X_val)
+        
+        # Train classifier
+        print("  Training Random Forest...", flush=True)
+        model = RandomForestClassifier(n_estimators=100, random_state=42, n_jobs=-1)
+        model.fit(X_train_scaled, y_train)
+        
+        # Predict and evaluate
+        print("  Making predictions...", flush=True)
+        y_pred = model.predict(X_val_scaled)
+        accuracy = accuracy_score(y_val, y_pred)
+        f1 = f1_score(y_val, y_pred, average='binary')
+        
+        fold_time = time.time() - start_time
+        fold_accuracies.append(accuracy)
+        fold_f1_scores.append(f1)
+        fold_times.append(fold_time)
+        
+        print(f"  Accuracy: {accuracy:.4f} | F1 Score: {f1:.4f} | Time: {fold_time:.2f}s")
+    
+    return fold_accuracies, fold_f1_scores, fold_times
 
-def generate_plots(master_indices, shap_values, X_data, feature_names, output_dir):
-    """Generates three consistent plots based on the master ranking."""
-    for n in [20, 30, 50]:
-        target_indices = master_indices[:n]
-        
-        filtered_shap = shap_values[:, target_indices]
-        filtered_X = X_data[:, target_indices]
-        filtered_names = [feature_names[i] for i in target_indices]
-        
-        # Scale height based on number of features
-        plt.figure(figsize=(14, n * 0.4 + 2)) 
-        
-        shap.summary_plot(
-            filtered_shap, 
-            filtered_X, 
-            feature_names=filtered_names, 
-            plot_type="dot", 
-            show=False, 
-            max_display=n
-        )
-        
-        plt.title(f"Consistent Ranking: Top {n} Separated Features", fontsize=16)
-        plt.tight_layout()
-        plt.savefig(os.path.join(output_dir, f"shap_consistent_top_{n}.png"), dpi=300)
-        plt.close()
-        print(f"  Saved Consistent Top {n}")
+def print_liwc_results_summary(liwc_results):
+    """Print formatted results summary for LIWC features."""
+    print(f"\n{'='*80}")
+    print("LIWC FEATURES EVALUATION RESULTS SUMMARY")
+    print(f"{'='*80}\n")
+    
+    liwc_accs, liwc_f1s, liwc_times = liwc_results
+    print("LIWC Features with Random Forest:")
+    print(f"  Mean Accuracy: {np.mean(liwc_accs):.4f} ± {np.std(liwc_accs):.4f}")
+    print(f"  Per-fold Accuracies: {[f'{acc:.4f}' for acc in liwc_accs]}")
+    print(f"  Mean F1 Score: {np.mean(liwc_f1s):.4f} ± {np.std(liwc_f1s):.4f}")
+    print(f"  Per-fold F1 Scores: {[f'{f1:.4f}' for f1 in liwc_f1s]}")
+    print(f"  Mean Time per Fold: {np.mean(liwc_times):.2f}s ± {np.std(liwc_times):.2f}s")
+    print(f"  Total Time: {np.sum(liwc_times):.2f}s")
+    
+    print(f"\n{'='*80}\n")
+
+def save_liwc_results_to_csv(liwc_results, output_file="liwc_evaluation_results.csv"):
+    """Save LIWC evaluation results to CSV file."""
+    liwc_accs, liwc_f1s, liwc_times = liwc_results
+    
+    results_dict = {
+        'Fold': list(range(1, 6)),
+        'LIWC_Accuracy': liwc_accs,
+        'LIWC_F1_Score': liwc_f1s,
+        'LIWC_Time': liwc_times
+    }
+    
+    results_df = pd.DataFrame(results_dict)
+    
+    # Add summary row
+    summary_dict = {
+        'Fold': ['Mean', 'Std'],
+        'LIWC_Accuracy': [np.mean(liwc_accs), np.std(liwc_accs)],
+        'LIWC_F1_Score': [np.mean(liwc_f1s), np.std(liwc_f1s)],
+        'LIWC_Time': [np.mean(liwc_times), np.std(liwc_times)]
+    }
+    
+    summary_row = pd.DataFrame(summary_dict)
+    results_df = pd.concat([results_df, summary_row], ignore_index=True)
+    results_df.to_csv(output_file, index=False)
+    print(f"Results saved to {output_file}")
 
 def main():
     path = "LIWC-22 Results - combined_training_dataset - LIWC Analysis.csv"
@@ -83,25 +124,20 @@ def main():
         return
 
     X, y, names = load_liwc_data(path)
-    X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.2, stratify=y, random_state=42)
     
-    scaler = StandardScaler()
-    X_test_scaled = scaler.fit_transform(X_test) # Simple scaling for explanation
+    # Perform cross-validation evaluation
+    print("\n" + "="*80)
+    print("STARTING LIWC FEATURES EVALUATION")
+    print("="*80)
+    liwc_results = evaluate_liwc_cv(X, y, n_splits=5)
     
-    model = RandomForestClassifier(n_estimators=100, random_state=42).fit(scaler.fit_transform(X_train), y_train)
+    # Print summary
+    print_liwc_results_summary(liwc_results)
     
-    explainer = shap.TreeExplainer(model)
-    # Correctly handle class output
-    raw_shap = explainer.shap_values(X_test_scaled)
-    shap_v = raw_shap[1] if isinstance(raw_shap, list) else (raw_shap[:,:,1] if len(raw_shap.shape)==3 else raw_shap)
-
-    os.makedirs("shap_results", exist_ok=True)
+    # Save results
+    save_liwc_results_to_csv(liwc_results)
     
-    # Get one ranking to rule them all
-    master_idx = get_unified_ranking(shap_v, X_test_scaled, names)
-    
-    generate_plots(master_idx, shap_v, X_test_scaled, names, "shap_results")
-    print("\nDone! All three images now have the exact same feature order.")
+    print("\nEvaluation complete!")
 
 if __name__ == "__main__":
     main()
