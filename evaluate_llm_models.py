@@ -21,7 +21,7 @@ from nltk.tokenize import sent_tokenize
 # Scikit-learn imports
 from sklearn.model_selection import StratifiedKFold
 from sklearn.ensemble import RandomForestClassifier
-from sklearn.metrics import accuracy_score
+from sklearn.metrics import accuracy_score, f1_score
 from sklearn.preprocessing import StandardScaler
 
 # TensorFlow and USE imports - MOVED TO LAZY IMPORT
@@ -121,6 +121,7 @@ class USEClassifier:
         skf = StratifiedKFold(n_splits=n_splits, shuffle=True, random_state=42)
         fold_accuracies = []
         fold_times = []
+        fold_f1s = []
         
         print(f"\n{'='*60}")
         print("Universal Sentence Encoder - 5-Fold Cross-Validation")
@@ -148,14 +149,16 @@ class USEClassifier:
             # Predict and evaluate
             y_pred = self.classifier.predict(X_val_emb_scaled)
             accuracy = accuracy_score(y_val, y_pred)
+            f1 = f1_score(y_val, y_pred, average="binary")
             
             fold_time = time.time() - start_time
             fold_accuracies.append(accuracy)
             fold_times.append(fold_time)
+            fold_f1s.append(f1)
             
-            print(f"  Accuracy: {accuracy:.4f} | Time: {fold_time:.2f}s")
+            print(f"  Accuracy: {accuracy:.4f} | F1: {f1:.4f} | Time: {fold_time:.2f}s")
         
-        return fold_accuracies, fold_times
+        return fold_accuracies, fold_times, fold_f1s
 
 
 class BERTClassifier:
@@ -225,6 +228,7 @@ class BERTClassifier:
         skf = StratifiedKFold(n_splits=n_splits, shuffle=True, random_state=42)
         fold_accuracies = []
         fold_times = []
+        fold_f1s = []
         
         print(f"\n{'='*60}")
         print(f"{BERT_MODEL_LABEL} - 5-Fold Cross-Validation")
@@ -252,14 +256,16 @@ class BERTClassifier:
             # Predict and evaluate
             y_pred = self.classifier.predict(X_val_emb_scaled)
             accuracy = accuracy_score(y_val, y_pred)
+            f1 = f1_score(y_val, y_pred, average="binary")
             
             fold_time = time.time() - start_time
             fold_accuracies.append(accuracy)
             fold_times.append(fold_time)
+            fold_f1s.append(f1)
             
-            print(f"  Accuracy: {accuracy:.4f} | Time: {fold_time:.2f}s")
+            print(f"  Accuracy: {accuracy:.4f} | F1: {f1:.4f} | Time: {fold_time:.2f}s")
         
-        return fold_accuracies, fold_times
+        return fold_accuracies, fold_times, fold_f1s
 
 
 def get_first_n_sentences(text, n_sentences=10, max_chars=6000):
@@ -397,20 +403,24 @@ def print_results_summary(use_results, bert_results):
     
     # USE Results
     if use_results is not None:
-        use_accs, use_times = use_results
+        use_accs, use_times, use_f1s = use_results
         print("Universal Sentence Encoder (USE):")
         print(f"  Mean Accuracy: {np.mean(use_accs):.4f} ± {np.std(use_accs):.4f}")
         print(f"  Per-fold Accuracies: {[f'{acc:.4f}' for acc in use_accs]}")
+        print(f"  Mean F1: {np.mean(use_f1s):.4f} ± {np.std(use_f1s):.4f}")
+        print(f"  Per-fold F1: {[f'{f1:.4f}' for f1 in use_f1s]}")
         print(f"  Mean Time per Fold: {np.mean(use_times):.2f}s ± {np.std(use_times):.2f}s")
         print(f"  Total Time: {np.sum(use_times):.2f}s")
         print("\n" + "-"*80 + "\n")
     
     # BERT/DistilBERT Results
     if bert_results is not None:
-        bert_accs, bert_times = bert_results
+        bert_accs, bert_times, bert_f1s = bert_results
         print(f"{BERT_MODEL_LABEL} ({BERT_MODEL_NAME}):")
         print(f"  Mean Accuracy: {np.mean(bert_accs):.4f} ± {np.std(bert_accs):.4f}")
         print(f"  Per-fold Accuracies: {[f'{acc:.4f}' for acc in bert_accs]}")
+        print(f"  Mean F1: {np.mean(bert_f1s):.4f} ± {np.std(bert_f1s):.4f}")
+        print(f"  Per-fold F1: {[f'{f1:.4f}' for f1 in bert_f1s]}")
         print(f"  Mean Time per Fold: {np.mean(bert_times):.2f}s ± {np.std(bert_times):.2f}s")
         print(f"  Total Time: {np.sum(bert_times):.2f}s")
         print("\n" + "-"*80 + "\n")
@@ -420,8 +430,8 @@ def print_results_summary(use_results, bert_results):
     # Comparison
     print("Comparison:")
     if use_results is not None and bert_results is not None:
-        use_accs, use_times = use_results
-        bert_accs, bert_times = bert_results
+        use_accs, use_times, _ = use_results
+        bert_accs, bert_times, _ = bert_results
         print(f"  USE vs {BERT_MODEL_LABEL} Accuracy Difference: {np.mean(bert_accs) - np.mean(use_accs):.4f}")
         print(f"  Speed Ratio (USE/{BERT_MODEL_LABEL}): {np.mean(use_times) / np.mean(bert_times):.2f}x")
     
@@ -437,15 +447,17 @@ def save_results_to_csv(use_results, bert_results, output_file="evaluation_resul
     
     # Add USE results if available
     if use_results is not None:
-        use_accs, use_times = use_results
+        use_accs, use_times, use_f1s = use_results
         results_dict['USE_Accuracy'] = use_accs
         results_dict['USE_Time'] = use_times
+        results_dict['USE_F1'] = use_f1s
     
     # Add BERT results if available
     if bert_results is not None:
-        bert_accs, bert_times = bert_results
+        bert_accs, bert_times, bert_f1s = bert_results
         results_dict['BERT_Accuracy'] = bert_accs
         results_dict['BERT_Time'] = bert_times
+        results_dict['BERT_F1'] = bert_f1s
     
     results_df = pd.DataFrame(results_dict)
     
@@ -455,14 +467,16 @@ def save_results_to_csv(use_results, bert_results, output_file="evaluation_resul
     }
     
     if use_results is not None:
-        use_accs, use_times = use_results
+        use_accs, use_times, use_f1s = use_results
         summary_dict['USE_Accuracy'] = [np.mean(use_accs), np.std(use_accs)]
         summary_dict['USE_Time'] = [np.mean(use_times), np.std(use_times)]
+        summary_dict['USE_F1'] = [np.mean(use_f1s), np.std(use_f1s)]
     
     if bert_results is not None:
-        bert_accs, bert_times = bert_results
+        bert_accs, bert_times, bert_f1s = bert_results
         summary_dict['BERT_Accuracy'] = [np.mean(bert_accs), np.std(bert_accs)]
         summary_dict['BERT_Time'] = [np.mean(bert_times), np.std(bert_times)]
+        summary_dict['BERT_F1'] = [np.mean(bert_f1s), np.std(bert_f1s)]
     
     summary_row = pd.DataFrame(summary_dict)
     results_df = pd.concat([results_df, summary_row], ignore_index=True)
@@ -473,15 +487,17 @@ def save_results_to_csv(use_results, bert_results, output_file="evaluation_resul
 def main():
     """Main evaluation pipeline."""
     dataset_path = "combined_training_dataset.csv"
-    RUN_USE = True   # USE only (DistilBERT and LIWC commented out)
-    # RUN_DISTILBERT = False  # commented out: DistilBERT not used
+    RUN_USE = True           # run USE only
+    RUN_DISTILBERT = False   # disable DistilBERT
 
-    # Load and preprocess data (full text for USE)
-    # if RUN_DISTILBERT and not RUN_USE:
-    #     X, y = load_and_preprocess_data(dataset_path, text_mode="full", max_chars=20000)
-    # else:
-    #     X, y = load_and_preprocess_data(dataset_path, text_mode="sentences", n_sentences=10, max_chars=6000)
-    X, y = load_and_preprocess_data(dataset_path, text_mode="full", max_chars=None, max_tokens=512)  # USE only, 512 tokens max
+    # Load and preprocess data
+    # For USE: use full text truncated to 512 tokens
+    if RUN_USE and not RUN_DISTILBERT:
+        X, y = load_and_preprocess_data(dataset_path, text_mode="full", max_chars=20000, max_tokens=512)
+    elif RUN_DISTILBERT and not RUN_USE:
+        X, y = load_and_preprocess_data(dataset_path, text_mode="full", max_chars=20000)
+    else:
+        X, y = load_and_preprocess_data(dataset_path, text_mode="sentences", n_sentences=10, max_chars=6000)
     
     # Check if TensorFlow can be imported (using subprocess to avoid crashes)
     # Only needed when RUN_USE is enabled.
