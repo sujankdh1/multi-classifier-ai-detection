@@ -1,9 +1,20 @@
+# Core dependencies (required for all branches)
+pandas>=2.0.0
 numpy>=1.24.0
 scikit-learn>=1.3.0
-tensorflow>=2.13.0
-tensorflow-hub>=0.15.0
-transformers>=4.30.0
-tqdm>=4.65.0
-nltk>=3.8.0
+
+# SHAP and visualization (required for shap-liwc branch)
 shap>=0.43.0
 matplotlib>=3.7.0
+
+# Deep learning dependencies (required for use-distilbert-classifier branch)
+# Uncomment if using USE/DistilBERT:
+# tensorflow>=2.13.0
+# tensorflow-hub>=0.15.0
+# transformers>=4.30.0
+# torch>=2.0.0
+# tqdm>=4.65.0
+# nltk>=3.8.0
+
+# Note: Install only the dependencies needed for your chosen branch
+# For minimal installation (LIWC/TF-IDF only), install only core dependencies
